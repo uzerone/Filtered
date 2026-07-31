@@ -7,6 +7,10 @@
 Fast filtering for images & designs — a native macOS app built with SwiftUI
 and Core Image. Made by [@uzerone](https://github.com/uzerone).
 
+> **Status: in development.** Filtered is an early work in progress — things
+> are incomplete and may change or break between commits. Not yet recommended
+> for production work.
+
 ## Features
 
 - **33 filters as layers** — halftone, mosaic, glass, glitch, ASCII,
