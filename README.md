@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Filtered/Filtered/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="Filtered icon">
+</p>
+
 # Filtered
 
 Fast filtering for images & designs — a native macOS app built with SwiftUI
@@ -37,4 +41,4 @@ Copy the built `Filtered.app` to `/Applications`.
 
 ---
 
-© [@uzerone](https://github.com/uzerone). All rights reserved.
+Released under the [MIT License](LICENSE) © 2026 [@uzerone](https://github.com/uzerone).
