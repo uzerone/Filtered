@@ -249,6 +249,32 @@ struct ImageToolsView: View {
             }
             .disabled(document.baseImage == nil)
 
+            HStack(spacing: 6) {
+                Button {
+                    document.enterCropMode()
+                } label: {
+                    Label(document.canvas.cropRect == nil ? "Crop…" : "Edit Crop…",
+                          systemImage: "crop")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(document.baseImage == nil)
+                if document.canvas.cropRect != nil {
+                    Button {
+                        document.applyCrop(nil)
+                    } label: { Image(systemName: "arrow.uturn.backward") }
+                    .help("Reset Crop")
+                }
+            }
+
+            Button {
+                document.autoEnhance()
+            } label: {
+                Label("Auto Enhance", systemImage: "wand.and.stars")
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(document.baseImage == nil)
+            .help("Analyze the image and add corrective adjustment layers")
+
             // Subject cutout (Vision background removal).
             if document.canvas.backgroundRemoved {
                 Button {

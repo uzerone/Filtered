@@ -9,6 +9,40 @@ enum LayerKind: Sendable, Equatable {
     case filter     // an adjustment/filter layer — affects everything below it
 }
 
+/// How a layer composites over what's beneath it. For filter layers this is
+/// how the filtered result blends back over the unfiltered composite.
+enum LayerBlendMode: String, Sendable, Codable, CaseIterable, Identifiable {
+    case normal, multiply, screen, overlay, softLight, darken, lighten, difference
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .normal: return "Normal"
+        case .multiply: return "Multiply"
+        case .screen: return "Screen"
+        case .overlay: return "Overlay"
+        case .softLight: return "Soft Light"
+        case .darken: return "Darken"
+        case .lighten: return "Lighten"
+        case .difference: return "Difference"
+        }
+    }
+
+    /// The verified Core Image compositing filter for this mode.
+    var ciFilterName: String {
+        switch self {
+        case .normal: return "CISourceOverCompositing"
+        case .multiply: return "CIMultiplyBlendMode"
+        case .screen: return "CIScreenBlendMode"
+        case .overlay: return "CIOverlayBlendMode"
+        case .softLight: return "CISoftLightBlendMode"
+        case .darken: return "CIDarkenBlendMode"
+        case .lighten: return "CILightenBlendMode"
+        case .difference: return "CIDifferenceBlendMode"
+        }
+    }
+}
+
 /// A single layer in the document. @MainActor @Observable reference type so the
 /// inspector and drag gestures mutate it in place while identity is preserved
 /// for selection. Never crosses the render actor — a Sendable snapshot does.
@@ -24,6 +58,7 @@ final class Layer: Identifiable {
     var kind: LayerKind
     var isVisible: Bool
     var opacity: Double            // 0...1
+    var blendMode: LayerBlendMode = .normal
 
     /// The filter payload (only for .filter layers).
     var filter: FilterInstance?
@@ -43,6 +78,7 @@ final class Layer: Identifiable {
          kind: LayerKind,
          isVisible: Bool = true,
          opacity: Double = 1,
+         blendMode: LayerBlendMode = .normal,
          filter: FilterInstance? = nil,
          text: TextContent? = nil,
          position: Point2D = Point2D(x: 0.5, y: 0.5),
@@ -52,6 +88,7 @@ final class Layer: Identifiable {
         self.kind = kind
         self.isVisible = isVisible
         self.opacity = opacity
+        self.blendMode = blendMode
         self.filter = filter
         self.text = text
         self.position = position

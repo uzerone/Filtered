@@ -136,6 +136,26 @@ private struct LayerCard: View {
                     .frame(width: 34, alignment: .trailing)
             }
 
+            // Blend mode.
+            HStack(spacing: 6) {
+                Image(systemName: "circle.tophalf.filled.inverse")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { layer.blendMode },
+                    set: { v in
+                        document.checkpoint("Blend Mode")
+                        layer.blendMode = v
+                        document.scheduleRender()
+                    })) {
+                    ForEach(LayerBlendMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .labelsHidden()
+            }
+
             // Reorder + delete.
             HStack(spacing: 4) {
                 Button { move(up: true) } label: { Image(systemName: "chevron.up") }

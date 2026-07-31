@@ -131,6 +131,15 @@ struct FilteredApp: App {
                 Button("Flip Horizontal") { document.flipHorizontal() }
                 Button("Flip Vertical") { document.flipVertical() }
                 Divider()
+                Button("Crop…") { document.enterCropMode() }
+                    .keyboardShortcut("k", modifiers: [.command, .option])
+                    .disabled(document.baseImage == nil)
+                Button("Reset Crop") { document.applyCrop(nil) }
+                    .disabled(document.canvas.cropRect == nil)
+                Button("Auto Enhance") { document.autoEnhance() }
+                    .keyboardShortcut("e", modifiers: [.command, .option])
+                    .disabled(document.baseImage == nil)
+                Divider()
                 if document.canvas.backgroundRemoved {
                     Button("Restore Background") { document.restoreBackground() }
                 } else {

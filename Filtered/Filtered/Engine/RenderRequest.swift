@@ -25,6 +25,8 @@ struct RenderRequest: Sendable {
     /// Subject cutout: when set, the base image is masked to the subject
     /// (mask is at source resolution, same orientation pipeline as the base).
     let subjectMask: SendableCIImage?
+    /// Normalized crop of the oriented source (CI coords, bottom-left origin).
+    let cropRect: CGRect?
 }
 
 /// A Sendable per-layer render description.
@@ -32,6 +34,7 @@ struct RenderLayer: Sendable {
     let kind: LayerKindSnapshot
     let isVisible: Bool
     let opacity: Double
+    let blendMode: LayerBlendMode
     /// For .filter layers: the filter to apply to the composite below.
     let filter: FilterInstance?
     /// For text layers: the pre-rendered text image (rendered on @MainActor) and

@@ -23,6 +23,12 @@ struct DocumentSnapshot: Codable, Equatable {
         var flippedH: Bool?
         /// Subject cutout active (mask recomputed on load when true).
         var backgroundRemoved: Bool?
+        /// Normalized crop of the oriented source image, Core Image coordinates
+        /// (origin bottom-left). Nil/absent = no crop.
+        var cropX: Double?
+        var cropY: Double?
+        var cropW: Double?
+        var cropH: Double?
     }
 
     struct LayerState: Codable, Equatable {
@@ -31,6 +37,8 @@ struct DocumentSnapshot: Codable, Equatable {
         var kind: LayerKindCode
         var isVisible: Bool
         var opacity: Double
+        /// Raw LayerBlendMode; optional so old files decode (nil = normal).
+        var blendMode: String?
         var filter: FilterInstance?
         var text: TextContent?
         var position: Point2D

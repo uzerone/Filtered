@@ -17,6 +17,9 @@ final class CanvasSettings {
     var flippedH: Bool = false
     /// Subject cutout (Vision mask) is active.
     var backgroundRemoved: Bool = false
+    /// Normalized crop of the oriented source (CI coords, origin bottom-left).
+    /// Nil = uncropped.
+    var cropRect: CGRect?
 
     init(width: Int = 1080,
          height: Int = 1080,

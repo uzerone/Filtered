@@ -128,6 +128,7 @@ final class FilteredDocument {
         canvas.backgroundRemoved = false
         canvas.orientationQuarters = 0
         canvas.flippedH = false
+        canvas.cropRect = nil
         // Ensure there is an image layer at the bottom.
         if !layers.contains(where: { $0.kind == .image }) {
             let layer = Layer.imageLayer()
@@ -271,6 +272,82 @@ final class FilteredDocument {
         }
     }
 
+    // MARK: - Crop
+
+    /// True while the canvas is showing the crop overlay.
+    var isCropping = false
+    /// The oriented, uncropped source rendered for the crop overlay.
+    var cropPreviewImage: NSImage?
+
+    /// Enter crop mode: render the oriented full source (no filters, no crop)
+    /// at display-friendly resolution for the overlay to work against.
+    func enterCropMode() {
+        guard let src = sourceImage else { return }
+        let e = src.extent
+        let q = ((canvas.orientationQuarters % 4) + 4) % 4
+        let w = (q % 2 == 0) ? e.width : e.height
+        let h = (q % 2 == 0) ? e.height : e.width
+        let scale = min(1, 2048 / max(w, h))
+        let request = RenderRequest(
+            base: SendableCIImage(src),
+            canvasPixelSize: Size2D(width: w, height: h),
+            background: .transparent,
+            imageFit: .stretch,
+            renderScale: scale,
+            layers: [RenderLayer(kind: .image, isVisible: true, opacity: 1,
+                                 blendMode: .normal, filter: nil, textImage: nil,
+                                 position: Point2D(x: 0.5, y: 0.5), rotation: 0)],
+            orientationQuarters: canvas.orientationQuarters,
+            flippedH: canvas.flippedH,
+            subjectMask: nil,
+            cropRect: nil)
+        Task { [weak self] in
+            guard let cg = await RenderEngine.shared.render(request)?.cgImage,
+                  let self else { return }
+            self.cropPreviewImage = NSImage(cgImage: cg,
+                                            size: NSSize(width: cg.width, height: cg.height))
+            self.isCropping = true
+        }
+    }
+
+    /// Commit a crop (normalized, CI coordinates — origin bottom-left) or nil
+    /// to clear it. A near-full rect counts as "no crop".
+    func applyCrop(_ rect: CGRect?) {
+        checkpoint("Crop")
+        if let r = rect,
+           !(r.minX < 0.005 && r.minY < 0.005 && r.width > 0.995 && r.height > 0.995) {
+            canvas.cropRect = CGRect(x: max(0, r.minX), y: max(0, r.minY),
+                                     width: min(1 - max(0, r.minX), r.width),
+                                     height: min(1 - max(0, r.minY), r.height))
+        } else {
+            canvas.cropRect = nil
+        }
+        exitCropMode()
+        scheduleRender()
+    }
+
+    func exitCropMode() {
+        isCropping = false
+        cropPreviewImage = nil
+    }
+
+    // MARK: - Auto Enhance
+
+    /// Analyze the source and add corrective adjustment layers (exposure,
+    /// contrast/saturation) — all fully editable afterwards.
+    func autoEnhance() {
+        guard let src = sourceImage else { return }
+        let instances = ImageStats.autoEnhanceInstances(for: src)
+        guard !instances.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "Already balanced"
+            alert.informativeText = "This image's exposure and color already look good."
+            alert.runModal()
+            return
+        }
+        applyFilterStack(name: "Auto Enhance", instances: instances)
+    }
+
     // MARK: - Result to clipboard
 
     /// Flatten at canvas resolution and put a PNG + TIFF on the pasteboard.
@@ -327,6 +404,7 @@ final class FilteredDocument {
                         kind: src.kind,
                         isVisible: src.isVisible,
                         opacity: src.opacity,
+                        blendMode: src.blendMode,
                         filter: src.filter,
                         text: src.text,
                         // Nudge duplicated text so it's visibly a copy.
@@ -446,11 +524,16 @@ final class FilteredDocument {
                           dpi: canvas.dpi,
                           orientationQuarters: canvas.orientationQuarters,
                           flippedH: canvas.flippedH,
-                          backgroundRemoved: canvas.backgroundRemoved),
+                          backgroundRemoved: canvas.backgroundRemoved,
+                          cropX: canvas.cropRect.map { Double($0.minX) },
+                          cropY: canvas.cropRect.map { Double($0.minY) },
+                          cropW: canvas.cropRect.map { Double($0.width) },
+                          cropH: canvas.cropRect.map { Double($0.height) }),
             layers: layers.map { l in
                 DocumentSnapshot.LayerState(
                     id: l.id, name: l.name, kind: l.kind.code,
                     isVisible: l.isVisible, opacity: l.opacity,
+                    blendMode: l.blendMode == .normal ? nil : l.blendMode.rawValue,
                     filter: l.filter, text: l.text,
                     position: l.position, rotation: l.rotation)
             },
@@ -466,10 +549,17 @@ final class FilteredDocument {
         canvas.orientationQuarters = snap.canvas.orientationQuarters ?? 0
         canvas.flippedH = snap.canvas.flippedH ?? false
         canvas.backgroundRemoved = snap.canvas.backgroundRemoved ?? false
+        if let x = snap.canvas.cropX, let y = snap.canvas.cropY,
+           let w = snap.canvas.cropW, let h = snap.canvas.cropH {
+            canvas.cropRect = CGRect(x: x, y: y, width: w, height: h)
+        } else {
+            canvas.cropRect = nil
+        }
         ensureMaskIfNeeded()
         layers = snap.layers.map { s in
             Layer(id: s.id, name: s.name, kind: LayerKind(s.kind),
                   isVisible: s.isVisible, opacity: s.opacity,
+                  blendMode: s.blendMode.flatMap(LayerBlendMode.init(rawValue:)) ?? .normal,
                   filter: s.filter, text: s.text,
                   position: s.position, rotation: s.rotation)
         }
@@ -551,6 +641,7 @@ final class FilteredDocument {
                     kind: .image,
                     isVisible: layer.isVisible,
                     opacity: layer.opacity,
+                    blendMode: layer.blendMode,
                     filter: nil,
                     textImage: nil,
                     position: layer.position,
@@ -561,6 +652,7 @@ final class FilteredDocument {
                     kind: .text,
                     isVisible: layer.isVisible,
                     opacity: layer.opacity,
+                    blendMode: layer.blendMode,
                     filter: nil,
                     textImage: ci.map(SendableCIImage.init),
                     position: layer.position,
@@ -571,6 +663,7 @@ final class FilteredDocument {
                     // Before/after compare bypasses every filter layer.
                     isVisible: layer.isVisible && !isComparingOriginal,
                     opacity: layer.opacity,
+                    blendMode: layer.blendMode,
                     filter: layer.filter,
                     textImage: nil,
                     position: layer.position,
@@ -587,6 +680,7 @@ final class FilteredDocument {
             layers: renderLayers,
             orientationQuarters: canvas.orientationQuarters,
             flippedH: canvas.flippedH,
-            subjectMask: canvas.backgroundRemoved ? subjectMask : nil)
+            subjectMask: canvas.backgroundRemoved ? subjectMask : nil,
+            cropRect: canvas.cropRect)
     }
 }

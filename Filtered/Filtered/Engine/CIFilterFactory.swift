@@ -41,6 +41,8 @@ enum CIFilterFactory {
             return applyASCII(params, to: input, extent: extent)
         case .pixelSort:
             return applyPixelSort(params, to: input, extent: extent, renderScale: renderScale)
+        case .curves:
+            return applyCurves(params, to: input)
         default:
             return applyStock(kind: kind, params: params, to: input, extent: extent)
         }
@@ -123,7 +125,7 @@ enum CIFilterFactory {
         case .crystallize:      return "CICrystallize"
         case .pointillize:      return "CIPointillize"
         case .bloom:            return "CIBloom"
-        case .glass, .grain, .gradientMap, .invert,
+        case .glass, .grain, .gradientMap, .invert, .curves,
              .chromaticAberration, .scanlines, .glitch, .ascii, .pixelSort:
             return nil  // handled specially
         }
@@ -368,6 +370,25 @@ enum CIFilterFactory {
         dot.setValue(0.9 as NSNumber, forKey: "inputSharpness")
         dot.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: "inputCenter")
         return (dot.outputImage ?? banded).cropped(to: extent)
+    }
+
+    // MARK: - Curves (CIToneCurve, five fixed-x points)
+
+    private static func applyCurves(_ params: FilterParameters,
+                                    to input: CIImage) -> CIImage {
+        let f = CIFilter.toneCurve()
+        f.inputImage = input
+        let xs: [Double] = [0, 0.25, 0.5, 0.75, 1]
+        let defaults: [Double] = xs
+        let ys: [Double] = (0..<5).map { i in
+            params["y\(i)"]?.doubleValue ?? defaults[i]
+        }
+        f.point0 = CGPoint(x: xs[0], y: ys[0])
+        f.point1 = CGPoint(x: xs[1], y: ys[1])
+        f.point2 = CGPoint(x: xs[2], y: ys[2])
+        f.point3 = CGPoint(x: xs[3], y: ys[3])
+        f.point4 = CGPoint(x: xs[4], y: ys[4])
+        return f.outputImage ?? input
     }
 
     // MARK: - Pixel sort (approximation via directional streak blur on bright areas)

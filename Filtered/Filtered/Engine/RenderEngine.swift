@@ -51,12 +51,15 @@ actor RenderEngine {
                                                      renderScale: scale,
                                                      textureCache: glassCache)
                     .cropped(to: canvasRect)
-                // opacity < 1 => blend filtered over original (partial strength).
-                if layer.opacity >= 1 {
+                // Fast path: full-strength normal blend replaces outright.
+                if layer.opacity >= 1 && layer.blendMode == .normal {
                     composite = filtered
                 } else {
+                    // Wet/dry + blend mode: the filtered result composites back
+                    // over the unfiltered image with the chosen mode.
                     let wet = applyOpacity(filtered, opacity: layer.opacity)
-                    composite = over(wet, background: composite, rect: canvasRect)
+                    composite = blend(wet, over: composite,
+                                      mode: layer.blendMode, rect: canvasRect)
                 }
 
             case .image:
@@ -67,19 +70,22 @@ actor RenderEngine {
                 if let mask = request.subjectMask {
                     source = applyMask(mask.image, to: source)
                 }
-                // Rotate / flip.
+                // Rotate / flip, then crop (crop is stored in oriented space).
                 source = orient(source,
                                 quarters: request.orientationQuarters,
                                 flippedH: request.flippedH)
+                if let crop = request.cropRect {
+                    source = applyCrop(crop, to: source)
+                }
                 let img = placeImage(source, in: canvasRect, fit: request.imageFit)
-                composite = over(applyOpacity(img, opacity: layer.opacity),
-                                 background: composite, rect: canvasRect)
+                composite = blend(applyOpacity(img, opacity: layer.opacity),
+                                  over: composite, mode: layer.blendMode, rect: canvasRect)
 
             case .text:
                 guard let textImg = layer.textImage?.image else { continue }
                 let img = positionText(textImg, layer: layer, canvasRect: canvasRect)
-                composite = over(applyOpacity(img, opacity: layer.opacity),
-                                 background: composite, rect: canvasRect)
+                composite = blend(applyOpacity(img, opacity: layer.opacity),
+                                  over: composite, mode: layer.blendMode, rect: canvasRect)
             }
         }
 
@@ -93,6 +99,31 @@ actor RenderEngine {
     }
 
     // MARK: - Placement & compositing helpers
+
+    /// Crop the oriented source by a normalized rect (CI bottom-left coords),
+    /// re-normalized so the extent origin returns to (0,0).
+    private func applyCrop(_ crop: CGRect, to image: CIImage) -> CIImage {
+        let e = image.extent
+        let r = CGRect(x: e.minX + crop.minX * e.width,
+                       y: e.minY + crop.minY * e.height,
+                       width: crop.width * e.width,
+                       height: crop.height * e.height)
+        guard r.width >= 1, r.height >= 1 else { return image }
+        return image.cropped(to: r)
+            .transformed(by: CGAffineTransform(translationX: -r.minX, y: -r.minY))
+    }
+
+    /// Composite with a blend mode; .normal is plain source-over.
+    private func blend(_ image: CIImage, over background: CIImage,
+                       mode: LayerBlendMode, rect: CGRect) -> CIImage {
+        guard mode != .normal else { return over(image, background: background, rect: rect) }
+        guard let f = CIFilter(name: mode.ciFilterName) else {
+            return over(image, background: background, rect: rect)
+        }
+        f.setValue(image, forKey: kCIInputImageKey)
+        f.setValue(background, forKey: kCIInputBackgroundImageKey)
+        return (f.outputImage ?? background).cropped(to: rect)
+    }
 
     /// Keep only the masked subject (white = keep), transparent elsewhere.
     private func applyMask(_ mask: CIImage, to image: CIImage) -> CIImage {

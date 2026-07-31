@@ -22,6 +22,18 @@ struct CanvasView: View {
     private let snapThreshold: CGFloat = 0.02   // ~2% of canvas
 
     var body: some View {
+        // Crop mode replaces the whole canvas with the crop workspace.
+        if document.isCropping, let img = document.cropPreviewImage {
+            CropOverlay(image: img,
+                        initialCrop: document.canvas.cropRect,
+                        onApply: { document.applyCrop($0) },
+                        onCancel: { document.exitCropMode() })
+        } else {
+            editorCanvas
+        }
+    }
+
+    private var editorCanvas: some View {
         GeometryReader { geo in
             let display = displayRect(in: geo.size)
             ZStack {
@@ -332,6 +344,227 @@ private struct GridGuide: View {
             Rectangle().fill(color)
                 .frame(width: rect.width, height: w)
                 .position(x: rect.midX, y: rect.minY + rect.height * t)
+        }
+    }
+}
+
+// MARK: - Crop workspace
+
+/// Full-canvas crop UI: the oriented source with a draggable/resizable crop
+/// rectangle, aspect presets, and Apply/Cancel. Works in top-left screen
+/// coordinates internally; converts to CI (bottom-left) space on apply.
+private struct CropOverlay: View {
+    let image: NSImage
+    let initialCrop: CGRect?          // CI-space normalized, or nil
+    let onApply: (CGRect?) -> Void
+    let onCancel: () -> Void
+
+    /// Screen-space normalized crop (origin top-left), 0..1.
+    @State private var crop: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    @State private var didInit = false
+    @State private var dragStart: CGRect?
+    @State private var aspect: Double? = nil     // nil = free
+
+    private let minSize: CGFloat = 0.05
+    private let aspects: [(String, Double?)] = [
+        ("Free", nil), ("1:1", 1), ("4:5", 4.0/5.0), ("3:2", 3.0/2.0),
+        ("16:9", 16.0/9.0), ("9:16", 9.0/16.0),
+    ]
+
+    var body: some View {
+        GeometryReader { geo in
+            let fitted = fittedRect(in: geo.size)
+            ZStack {
+                Color(white: 0.10)
+
+                Image(nsImage: image)
+                    .resizable()
+                    .frame(width: fitted.width, height: fitted.height)
+                    .position(x: fitted.midX, y: fitted.midY)
+
+                // Dim everything outside the crop.
+                CropShade(imageRect: fitted, crop: crop)
+                    .allowsHitTesting(false)
+
+                // Crop rectangle + handles.
+                cropRectangle(in: fitted)
+
+                // Controls.
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Picker("", selection: $aspect) {
+                            ForEach(aspects, id: \.0) { name, value in
+                                Text(name).tag(value)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 320)
+                        .onChange(of: aspect) { _, a in
+                            if let a { applyAspect(a) }
+                        }
+                        Button("Reset") { crop = CGRect(x: 0, y: 0, width: 1, height: 1) }
+                        Button("Cancel") { onCancel() }
+                            .keyboardShortcut(.cancelAction)
+                        Button("Apply") { apply() }
+                            .keyboardShortcut(.defaultAction)
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.bottom, 16)
+                }
+            }
+            .onAppear {
+                guard !didInit else { return }
+                didInit = true
+                if let ci = initialCrop {
+                    // CI bottom-left -> screen top-left.
+                    crop = CGRect(x: ci.minX, y: 1 - ci.minY - ci.height,
+                                  width: ci.width, height: ci.height)
+                }
+            }
+        }
+    }
+
+    private func apply() {
+        // Screen top-left -> CI bottom-left.
+        let ci = CGRect(x: crop.minX, y: 1 - crop.minY - crop.height,
+                        width: crop.width, height: crop.height)
+        onApply(ci)
+    }
+
+    private func applyAspect(_ a: Double) {
+        // Keep the center; fit the largest rect with the aspect inside 0..1
+        // around the current crop, using image-space aspect correction.
+        let imgAspect = image.size.width / image.size.height
+        // Desired w/h in normalized units so that (w*imgW)/(h*imgH) == a.
+        let normAspect = a / Double(imgAspect)
+        var w = crop.width
+        var h = w / CGFloat(normAspect)
+        if h > 1 { h = 1; w = h * CGFloat(normAspect) }
+        if w > 1 { w = 1; h = w / CGFloat(normAspect) }
+        let cx = crop.midX, cy = crop.midY
+        var r = CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
+        r.origin.x = min(max(r.origin.x, 0), 1 - r.width)
+        r.origin.y = min(max(r.origin.y, 0), 1 - r.height)
+        crop = r
+    }
+
+    private func cropRectangle(in fitted: CGRect) -> some View {
+        let r = CGRect(x: fitted.minX + crop.minX * fitted.width,
+                       y: fitted.minY + crop.minY * fitted.height,
+                       width: crop.width * fitted.width,
+                       height: crop.height * fitted.height)
+        return ZStack {
+            // Border + thirds.
+            Rectangle().stroke(Color.white, lineWidth: 1.5)
+                .frame(width: r.width, height: r.height)
+                .position(x: r.midX, y: r.midY)
+            ForEach([1.0 / 3.0, 2.0 / 3.0], id: \.self) { t in
+                Rectangle().fill(Color.white.opacity(0.25))
+                    .frame(width: 0.75, height: r.height)
+                    .position(x: r.minX + r.width * t, y: r.midY)
+                Rectangle().fill(Color.white.opacity(0.25))
+                    .frame(width: r.width, height: 0.75)
+                    .position(x: r.midX, y: r.minY + r.height * t)
+            }
+            // Move (drag the interior).
+            Rectangle().fill(Color.white.opacity(0.001))
+                .frame(width: max(r.width - 28, 1), height: max(r.height - 28, 1))
+                .position(x: r.midX, y: r.midY)
+                .gesture(moveGesture(in: fitted))
+            // Corner handles.
+            ForEach(0..<4, id: \.self) { corner in
+                let cx = (corner % 2 == 0) ? r.minX : r.maxX
+                let cy = (corner < 2) ? r.minY : r.maxY
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1))
+                    .position(x: cx, y: cy)
+                    .gesture(resizeGesture(corner: corner, in: fitted))
+            }
+        }
+    }
+
+    private func moveGesture(in fitted: CGRect) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if dragStart == nil { dragStart = crop }
+                guard let start = dragStart else { return }
+                var r = start
+                r.origin.x += value.translation.width / fitted.width
+                r.origin.y += value.translation.height / fitted.height
+                r.origin.x = min(max(r.origin.x, 0), 1 - r.width)
+                r.origin.y = min(max(r.origin.y, 0), 1 - r.height)
+                crop = r
+            }
+            .onEnded { _ in dragStart = nil }
+    }
+
+    private func resizeGesture(corner: Int, in fitted: CGRect) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if dragStart == nil { dragStart = crop }
+                guard let start = dragStart else { return }
+                let dx = value.translation.width / fitted.width
+                let dy = value.translation.height / fitted.height
+                var minX = start.minX, maxX = start.maxX
+                var minY = start.minY, maxY = start.maxY
+                if corner % 2 == 0 { minX = min(max(start.minX + dx, 0), maxX - minSize) }
+                else { maxX = max(min(start.maxX + dx, 1), minX + minSize) }
+                if corner < 2 { minY = min(max(start.minY + dy, 0), maxY - minSize) }
+                else { maxY = max(min(start.maxY + dy, 1), minY + minSize) }
+                var r = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+                // Aspect lock: derive height from width around the anchored corner.
+                if let a = aspect {
+                    let imgAspect = image.size.width / image.size.height
+                    let normAspect = CGFloat(a) / imgAspect
+                    let h = r.width / normAspect
+                    if corner < 2 { r.origin.y = maxY - h }   // top corners anchor bottom
+                    r.size.height = h
+                    if r.minY < 0 || r.maxY > 1 {
+                        // Clamp by height instead.
+                        let hClamped = min(r.height, corner < 2 ? maxY : 1 - r.minY)
+                        r.size.height = hClamped
+                        r.size.width = hClamped * normAspect
+                        if corner % 2 == 0 { r.origin.x = maxX - r.width }
+                        if corner < 2 { r.origin.y = maxY - r.height }
+                    }
+                }
+                crop = r
+            }
+            .onEnded { _ in dragStart = nil }
+    }
+
+    private func fittedRect(in size: CGSize) -> CGRect {
+        let pad: CGFloat = 48
+        let avail = CGSize(width: max(size.width - pad * 2, 1),
+                           height: max(size.height - pad * 2, 1))
+        let aspect = image.size.width / max(image.size.height, 1)
+        var w = avail.width
+        var h = w / aspect
+        if h > avail.height { h = avail.height; w = h * aspect }
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+}
+
+/// Dims the area outside the crop rect.
+private struct CropShade: View {
+    let imageRect: CGRect
+    let crop: CGRect
+
+    var body: some View {
+        let r = CGRect(x: imageRect.minX + crop.minX * imageRect.width,
+                       y: imageRect.minY + crop.minY * imageRect.height,
+                       width: crop.width * imageRect.width,
+                       height: crop.height * imageRect.height)
+        Canvas { ctx, size in
+            var path = Path(CGRect(origin: .zero, size: size))
+            path.addRect(r)
+            ctx.fill(path, with: .color(.black.opacity(0.55)), style: FillStyle(eoFill: true))
         }
     }
 }

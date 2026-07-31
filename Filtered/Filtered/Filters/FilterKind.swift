@@ -86,6 +86,7 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
     case pixelSort      // approximation via posterize+blur (custom-ish)
     // Adjust
     case colorControls
+    case curves         // CIToneCurve, 5 points
     case exposure
     case gamma
     case hue
@@ -124,6 +125,7 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
         case .scanlines:      return "Scanlines"
         case .pixelSort:      return "Pixel Sort"
         case .colorControls:  return "Brightness / Contrast"
+        case .curves:         return "Curves"
         case .exposure:       return "Exposure"
         case .gamma:          return "Gamma"
         case .hue:            return "Hue"
@@ -142,7 +144,7 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
         case .grain, .gradientMap, .threshold, .posterize, .monochrome, .invert,
              .comic, .edges, .crystallize, .pointillize, .bloom, .ascii: return .stylize
         case .glitch, .chromaticAberration, .scanlines, .pixelSort: return .glitch
-        case .colorControls, .exposure, .gamma, .hue, .vignette, .blur: return .adjust
+        case .colorControls, .curves, .exposure, .gamma, .hue, .vignette, .blur: return .adjust
         case .sharpenLuminance, .unsharpMask: return .sharpen
         }
     }
@@ -274,6 +276,16 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
                 .init(key: "inputBrightness", label: "Brightness", kind: .scalar, min: -1, max: 1, def: 0),
                 .init(key: "inputContrast", label: "Contrast", kind: .scalar, min: 0, max: 4, def: 1),
                 .init(key: "inputSaturation", label: "Saturation", kind: .scalar, min: 0, max: 2, def: 1),
+            ]
+        case .curves:
+            // Five tone-curve points at fixed x = 0, .25, .5, .75, 1; the
+            // sliders move each point's OUTPUT. Defaults = identity.
+            return [
+                .init(key: "y0", label: "Shadows", kind: .scalar, min: 0, max: 1, def: 0),
+                .init(key: "y1", label: "Darks", kind: .scalar, min: 0, max: 1, def: 0.25),
+                .init(key: "y2", label: "Mids", kind: .scalar, min: 0, max: 1, def: 0.5),
+                .init(key: "y3", label: "Lights", kind: .scalar, min: 0, max: 1, def: 0.75),
+                .init(key: "y4", label: "Highlights", kind: .scalar, min: 0, max: 1, def: 1),
             ]
         case .exposure:
             return [
