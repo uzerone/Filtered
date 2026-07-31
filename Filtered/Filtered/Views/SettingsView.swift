@@ -140,7 +140,7 @@ private struct AboutSettings: View {
             Text("Fast filtering for images & designs")
                 .font(.callout).foregroundStyle(.secondary)
             Divider().frame(width: 200)
-            Text("Made by JYEU@CTRLP")
+            Text("Made by @uzerone")
                 .font(.callout)
             Text("Version 1.0")
                 .font(.caption2).foregroundStyle(.tertiary)

@@ -212,7 +212,7 @@ enum ImageExporter {
             props[kCGImagePropertyIPTCDictionary] = [
                 kCGImagePropertyIPTCByline: author,
                 kCGImagePropertyIPTCCredit: author,
-                kCGImagePropertyIPTCOriginatingProgram: "Filtered by JYEU@CTRLP",
+                kCGImagePropertyIPTCOriginatingProgram: "Filtered by @uzerone",
             ] as [CFString: Any]
             props[kCGImagePropertyTIFFDictionary] = [
                 kCGImagePropertyTIFFArtist: author,

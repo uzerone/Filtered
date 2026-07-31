@@ -21,7 +21,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Filtered by JYEU@CTRLP</string>
+	<string>Filtered by @uzerone</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<!-- Exported UTI: the Filtered project document type -->
