@@ -12,6 +12,12 @@ final class CanvasSettings {
     var imageFit: ImageFit
     var dpi: Int
 
+    /// Source-image orientation: quarter-turns clockwise (0–3), mirror first.
+    var orientationQuarters: Int = 0
+    var flippedH: Bool = false
+    /// Subject cutout (Vision mask) is active.
+    var backgroundRemoved: Bool = false
+
     init(width: Int = 1080,
          height: Int = 1080,
          background: CanvasBackground = .solid(.black),

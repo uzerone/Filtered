@@ -18,6 +18,13 @@ struct RenderRequest: Sendable {
     /// by this so preview and export match.
     let renderScale: Double
     let layers: [RenderLayer]
+
+    /// Source-image orientation: quarter-turns clockwise, mirror first.
+    let orientationQuarters: Int
+    let flippedH: Bool
+    /// Subject cutout: when set, the base image is masked to the subject
+    /// (mask is at source resolution, same orientation pipeline as the base).
+    let subjectMask: SendableCIImage?
 }
 
 /// A Sendable per-layer render description.

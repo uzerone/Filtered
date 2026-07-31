@@ -93,6 +93,8 @@ struct ExportOptions {
     var format: ExportFormat = .png
     var quality: Double = 0.9   // for lossy formats
     var sizeMode: ExportSizeMode = .scale(1)
+    /// Write name.png / name@2x.png / name@3x.png in one go (scale mode only).
+    var batchScales: Bool = false
 
     /// Resolve the effective renderScale given the canvas pixel size.
     func renderScale(canvasWidth: Int, canvasHeight: Int) -> Double {
@@ -122,6 +124,29 @@ enum ImageExporter {
         panel.allowedContentTypes = [options.format.utType]
         panel.nameFieldStringValue = "Filtered.\(options.format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // Batch mode: one pick, three files (name, name@2x, name@3x).
+        if options.batchScales {
+            let settings = AppSettings.shared
+            let author = settings.embedAuthorMetadata ? settings.authorCredit : nil
+            let base = url.deletingPathExtension()
+            let ext = url.pathExtension
+            for (scale, suffix) in [(1.0, ""), (2.0, "@2x"), (3.0, "@3x")] {
+                let request = document.makeRenderRequest(renderScale: scale)
+                guard var cg = await RenderEngine.shared.render(request)?.cgImage else { continue }
+                if settings.addWatermark {
+                    var text = settings.watermarkText.isEmpty ? settings.authorCredit : settings.watermarkText
+                    if text.isEmpty { text = "Filtered" }
+                    if let stamped = drawWatermark(text, on: cg) { cg = stamped }
+                }
+                let target = URL(fileURLWithPath: base.path + suffix).appendingPathExtension(ext)
+                if !write(cgImage: cg, to: target, options: options, author: author) {
+                    presentError("Export failed", "Couldn't write \(target.lastPathComponent).")
+                    return
+                }
+            }
+            return
+        }
 
         let scale = options.renderScale(canvasWidth: document.canvas.width,
                                         canvasHeight: document.canvas.height)

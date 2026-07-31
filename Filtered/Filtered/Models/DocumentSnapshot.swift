@@ -14,6 +14,15 @@ struct DocumentSnapshot: Codable, Equatable {
         var background: CanvasBackground
         var imageFit: ImageFit
         var dpi: Int
+        // Optional so pre-existing .ftrd files (and older app versions reading
+        // new files) keep decoding: JSONDecoder treats missing keys as nil and
+        // ignores unknown keys.
+        /// Source-image orientation: quarter-turns clockwise (0–3).
+        var orientationQuarters: Int?
+        /// Source-image horizontal mirror, applied before rotation.
+        var flippedH: Bool?
+        /// Subject cutout active (mask recomputed on load when true).
+        var backgroundRemoved: Bool?
     }
 
     struct LayerState: Codable, Equatable {

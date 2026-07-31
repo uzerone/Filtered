@@ -61,6 +61,17 @@ struct FilteredApp: App {
                     .keyboardShortcut("o", modifiers: .command)
                 Button("Open Project…") { ProjectIO.open(into: document) }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                Menu("Open Recent") {
+                    ForEach(AppSettings.shared.recentProjects, id: \.self) { path in
+                        Button((path as NSString).lastPathComponent) {
+                            ProjectIO.openFile(at: URL(fileURLWithPath: path), into: document)
+                        }
+                    }
+                    if !AppSettings.shared.recentProjects.isEmpty {
+                        Divider()
+                        Button("Clear Menu") { AppSettings.shared.recentProjects = [] }
+                    }
+                }
             }
             // Save / Save As for the .ftrd project.
             CommandGroup(replacing: .saveItem) {
@@ -85,7 +96,10 @@ struct FilteredApp: App {
             // Edit menu additions
             CommandGroup(after: .pasteboard) {
                 Divider()
-                // ⇧⌘V so plain ⌘V still pastes text inside text fields.
+                // ⇧⌘ variants so plain ⌘C/⌘V still work inside text fields.
+                Button("Copy Image") { document.copyResultToPasteboard() }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(document.baseImage == nil && document.layers.isEmpty)
                 Button("Paste Image") {
                     if let (image, size) = ImageImporter.loadFromPasteboard() {
                         document.setSourceImage(image, pixelSize: size)
@@ -107,6 +121,22 @@ struct FilteredApp: App {
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(document.selectedLayerID == nil)
+            }
+            // Image menu: rotate / flip / subject cutout.
+            CommandMenu("Image") {
+                Button("Rotate Left") { document.rotateCounterclockwise() }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                Button("Rotate Right") { document.rotateClockwise() }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
+                Button("Flip Horizontal") { document.flipHorizontal() }
+                Button("Flip Vertical") { document.flipVertical() }
+                Divider()
+                if document.canvas.backgroundRemoved {
+                    Button("Restore Background") { document.restoreBackground() }
+                } else {
+                    Button("Cut Out Subject") { document.removeBackground() }
+                        .disabled(document.baseImage == nil || document.isComputingMask)
+                }
             }
             // Zoom — inserted into the system View menu (a CommandMenu("View")
             // would create a duplicate menu next to the built-in one).

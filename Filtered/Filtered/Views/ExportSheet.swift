@@ -11,6 +11,7 @@ struct ExportSheet: View {
     @State private var customWidth: Int = 1080
     @State private var customHeight: Int = 1080
     @State private var lockAspect = true
+    @State private var batchScales = false
     @State private var isExporting = false
 
     private let scaleOptions: [Double] = [1, 2, 3, 4]
@@ -91,6 +92,10 @@ struct ExportSheet: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .disabled(batchScales)
+
+                    Toggle("Export @1× @2× @3× together", isOn: $batchScales)
+                        .font(.caption)
                 }
 
                 let (w, h) = outSize
@@ -121,7 +126,8 @@ struct ExportSheet: View {
 
     private func export() {
         isExporting = true
-        let options = ExportOptions(format: format, quality: quality, sizeMode: sizeMode)
+        let options = ExportOptions(format: format, quality: quality, sizeMode: sizeMode,
+                                    batchScales: batchScales && !useCustomSize)
         Task {
             await ImageExporter.exportPanel(document: document, options: options)
             await MainActor.run {

@@ -1,5 +1,13 @@
 import Foundation
 
+/// A user-saved Look: a named snapshot of a filter stack, persisted across
+/// launches. FilterInstance is Codable, so this serializes losslessly.
+struct SavedLook: Identifiable, Codable, Sendable {
+    var id = UUID()
+    var name: String
+    var filters: [FilterInstance]
+}
+
 /// A "Look": a curated, one-click stack of filter layers — the fast path that
 /// frontier filter apps lead with. Applying a Look inserts its filters as
 /// ordinary filter layers (bottom-to-top), so everything stays editable.

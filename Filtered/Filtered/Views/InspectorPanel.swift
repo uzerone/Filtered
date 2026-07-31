@@ -69,6 +69,8 @@ struct InspectorPanel: View {
                             Divider()
                             FilterPickerGrid()
                         case .image:
+                            ImageToolsView()
+                            Divider()
                             FilterPickerGrid()
                         }
                     }
@@ -107,32 +109,63 @@ struct FilterPickerGrid: View {
 
     private let buttonColumns = [GridItem(.adaptive(minimum: 110), spacing: 6)]
 
+    @State private var showSaveLook = false
+    @State private var newLookName = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Looks: curated one-click filter stacks — the fast path.
             VStack(alignment: .leading, spacing: 6) {
-                Text("Looks").font(.headline)
+                HStack {
+                    Text("Looks").font(.headline)
+                    Spacer()
+                    // Capture the current filter stack as a reusable Look.
+                    Button {
+                        newLookName = ""
+                        showSaveLook = true
+                    } label: {
+                        Label("Save", systemImage: "plus.square.dashed")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(document.currentFilterStack.isEmpty)
+                    .help("Save the current filter stack as a Look")
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(LookPreset.all) { look in
-                            Button {
+                            lookChip(name: look.name, icon: look.icon) {
                                 document.applyLook(look)
-                            } label: {
-                                VStack(spacing: 3) {
-                                    Image(systemName: look.icon)
-                                        .font(.system(size: 15, weight: .medium))
-                                        .frame(height: 18)
-                                    Text(look.name)
-                                        .font(.caption2)
-                                        .lineLimit(1)
-                                }
-                                .frame(width: 66, height: 48)
                             }
-                            .buttonStyle(.bordered)
-                            .help("Apply the \(look.name) look as editable filter layers")
+                        }
+                        if !settings.savedLooks.isEmpty {
+                            Divider().frame(height: 34)
+                            ForEach(settings.savedLooks) { look in
+                                lookChip(name: look.name, icon: "star") {
+                                    document.applyFilterStack(name: look.name,
+                                                              instances: look.filters)
+                                }
+                                .contextMenu {
+                                    Button("Delete Look", role: .destructive) {
+                                        settings.savedLooks.removeAll { $0.id == look.id }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+            }
+            .alert("Save Look", isPresented: $showSaveLook) {
+                TextField("Name", text: $newLookName)
+                Button("Save") {
+                    let name = newLookName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    settings.savedLooks.append(
+                        SavedLook(name: name, filters: document.currentFilterStack))
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Saves the current filter layers as a reusable Look.")
             }
 
             Divider()
@@ -147,7 +180,29 @@ struct FilterPickerGrid: View {
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.small)
 
-            ForEach(FilterFamily.allCases) { family in
+            filterFamilies
+        }
+    }
+
+    private func lookChip(name: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(height: 18)
+                Text(name)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(width: 66, height: 48)
+        }
+        .buttonStyle(.bordered)
+        .help("Apply \(name) as editable filter layers")
+    }
+
+    @ViewBuilder
+    private var filterFamilies: some View {
+        ForEach(FilterFamily.allCases) { family in
                 let items = filters(in: family)
                 if !items.isEmpty {
                     Text(family.displayName)
@@ -162,6 +217,63 @@ struct FilterPickerGrid: View {
                         }
                     }
                 }
+            }
+    }
+}
+
+/// Image tools for the base image layer: rotate, flip, subject cutout.
+struct ImageToolsView: View {
+    @Environment(FilteredDocument.self) private var document
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Image").font(.headline)
+
+            HStack(spacing: 6) {
+                Button { document.rotateCounterclockwise() } label: {
+                    Image(systemName: "rotate.left")
+                }
+                .help("Rotate Left")
+                Button { document.rotateClockwise() } label: {
+                    Image(systemName: "rotate.right")
+                }
+                .help("Rotate Right")
+                Button { document.flipHorizontal() } label: {
+                    Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                }
+                .help("Flip Horizontal")
+                Button { document.flipVertical() } label: {
+                    Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down")
+                }
+                .help("Flip Vertical")
+            }
+            .disabled(document.baseImage == nil)
+
+            // Subject cutout (Vision background removal).
+            if document.canvas.backgroundRemoved {
+                Button {
+                    document.restoreBackground()
+                } label: {
+                    Label("Restore Background", systemImage: "person.and.background.dotted")
+                        .frame(maxWidth: .infinity)
+                }
+            } else {
+                Button {
+                    document.removeBackground()
+                } label: {
+                    if document.isComputingMask {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Finding subject…")
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Label("Cut Out Subject", systemImage: "person.crop.square.badge.camera")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .disabled(document.baseImage == nil || document.isComputingMask)
+                .help("Remove the background around the detected subject")
             }
         }
     }

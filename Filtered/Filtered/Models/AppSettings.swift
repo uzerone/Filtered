@@ -40,6 +40,26 @@ final class AppSettings {
         didSet { defaults.set(importedFontBookmarks, forKey: Keys.fontBookmarks) }
     }
 
+    // MARK: User-saved Looks (named filter stacks), JSON-encoded.
+    var savedLooks: [SavedLook] {
+        didSet {
+            if let data = try? JSONEncoder().encode(savedLooks) {
+                defaults.set(data, forKey: Keys.savedLooks)
+            }
+        }
+    }
+
+    // MARK: Recent projects (paths, most recent first, max 10).
+    var recentProjects: [String] {
+        didSet { defaults.set(recentProjects, forKey: Keys.recentProjects) }
+    }
+
+    func noteRecentProject(_ url: URL) {
+        var list = recentProjects.filter { $0 != url.path }
+        list.insert(url.path, at: 0)
+        recentProjects = Array(list.prefix(10))
+    }
+
     private let defaults = UserDefaults.standard
 
     private enum Keys {
@@ -50,6 +70,8 @@ final class AppSettings {
         static let watermarkText = "watermarkText"
         static let disabledFilters = "disabledFilters"
         static let fontBookmarks = "importedFontBookmarks"
+        static let savedLooks = "savedLooks"
+        static let recentProjects = "recentProjects"
     }
 
     private init() {
@@ -60,6 +82,9 @@ final class AppSettings {
         watermarkText = defaults.string(forKey: Keys.watermarkText) ?? ""
         disabledFilters = Set(defaults.stringArray(forKey: Keys.disabledFilters) ?? [])
         importedFontBookmarks = (defaults.array(forKey: Keys.fontBookmarks) as? [Data]) ?? []
+        savedLooks = (defaults.data(forKey: Keys.savedLooks))
+            .flatMap { try? JSONDecoder().decode([SavedLook].self, from: $0) } ?? []
+        recentProjects = defaults.stringArray(forKey: Keys.recentProjects) ?? []
     }
 
     // MARK: Filter helpers

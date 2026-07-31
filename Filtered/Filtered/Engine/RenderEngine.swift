@@ -61,7 +61,17 @@ actor RenderEngine {
 
             case .image:
                 guard let base = request.base else { continue }
-                let img = placeImage(base.image, in: canvasRect, fit: request.imageFit)
+                var source = base.image
+                // Subject cutout: mask BEFORE orientation/placement (the mask
+                // is at source resolution and goes through the same transforms).
+                if let mask = request.subjectMask {
+                    source = applyMask(mask.image, to: source)
+                }
+                // Rotate / flip.
+                source = orient(source,
+                                quarters: request.orientationQuarters,
+                                flippedH: request.flippedH)
+                let img = placeImage(source, in: canvasRect, fit: request.imageFit)
                 composite = over(applyOpacity(img, opacity: layer.opacity),
                                  background: composite, rect: canvasRect)
 
@@ -83,6 +93,31 @@ actor RenderEngine {
     }
 
     // MARK: - Placement & compositing helpers
+
+    /// Keep only the masked subject (white = keep), transparent elsewhere.
+    private func applyMask(_ mask: CIImage, to image: CIImage) -> CIImage {
+        let f = CIFilter.blendWithMask()
+        f.inputImage = image
+        f.backgroundImage = CIImage.empty().cropped(to: image.extent)
+        f.maskImage = mask
+        return (f.outputImage ?? image).cropped(to: image.extent)
+    }
+
+    /// Mirror-then-rotate the source (quarter-turns clockwise on screen),
+    /// re-normalized so the extent origin stays at (0,0).
+    private func orient(_ image: CIImage, quarters: Int, flippedH: Bool) -> CIImage {
+        var img = image
+        if flippedH {
+            img = img.transformed(by: CGAffineTransform(scaleX: -1, y: 1))
+        }
+        let q = ((quarters % 4) + 4) % 4
+        if q != 0 {
+            // Core Image is bottom-up: a visually-clockwise turn is -90°.
+            img = img.transformed(by: CGAffineTransform(rotationAngle: -CGFloat(q) * .pi / 2))
+        }
+        let e = img.extent
+        return img.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY))
+    }
 
     private func placeImage(_ image: CIImage, in canvasRect: CGRect, fit: ImageFit) -> CIImage {
         let src = image.extent

@@ -113,6 +113,7 @@ final class FilteredDocument {
         selectedLayerID = nil
         editingFilterLayerID = nil
         projectURL = nil
+        subjectMask = nil
         isDirty = false
         canvas = CanvasSettings()
         clearUndoHistory()
@@ -122,6 +123,11 @@ final class FilteredDocument {
     func setSourceImage(_ image: CIImage, pixelSize: Size2D) {
         sourceImage = image
         sourcePixelSize = pixelSize
+        // A new image invalidates the old mask and orientation.
+        subjectMask = nil
+        canvas.backgroundRemoved = false
+        canvas.orientationQuarters = 0
+        canvas.flippedH = false
         // Ensure there is an image layer at the bottom.
         if !layers.contains(where: { $0.kind == .image }) {
             let layer = Layer.imageLayer()
@@ -181,6 +187,136 @@ final class FilteredDocument {
             return idx + 1
         }
         return layers.count
+    }
+
+    // MARK: - Image operations (rotate / flip / subject cutout)
+
+    /// Composing a screen-space op onto (quarters, flippedH) where the render
+    /// applies mirror FIRST, then rotation.
+    func rotateClockwise() {
+        checkpoint("Rotate")
+        canvas.orientationQuarters = (canvas.orientationQuarters + 1) % 4
+        scheduleRender()
+    }
+
+    func rotateCounterclockwise() {
+        checkpoint("Rotate")
+        canvas.orientationQuarters = (canvas.orientationQuarters + 3) % 4
+        scheduleRender()
+    }
+
+    func flipHorizontal() {
+        checkpoint("Flip Horizontal")
+        // H · R(q) · F(f) = R(-q) · H · F(f): negate rotation, toggle mirror.
+        canvas.orientationQuarters = (4 - canvas.orientationQuarters) % 4
+        canvas.flippedH.toggle()
+        scheduleRender()
+    }
+
+    func flipVertical() {
+        checkpoint("Flip Vertical")
+        // V = H · R(2): compose both.
+        canvas.orientationQuarters = (4 - ((canvas.orientationQuarters + 2) % 4)) % 4
+        canvas.flippedH.toggle()
+        scheduleRender()
+    }
+
+    /// The Vision subject mask (source resolution). Cached, not snapshotted —
+    /// recomputed on demand/load when `canvas.backgroundRemoved` is set.
+    @ObservationIgnored private var subjectMask: SendableCIImage?
+    /// True while the segmentation model is running.
+    var isComputingMask = false
+
+    /// One-click background removal. Computes the mask off-main, then enables
+    /// the cutout (undoable via the flag; the mask itself stays cached).
+    func removeBackground() {
+        guard let source = sourceImage, !isComputingMask else { return }
+        isComputingMask = true
+        Task { [weak self] in
+            let mask = await SubjectMask.compute(for: source)
+            guard let self else { return }
+            self.isComputingMask = false
+            guard let mask else {
+                let alert = NSAlert()
+                alert.messageText = "No subject found"
+                alert.informativeText = "Couldn't detect a foreground subject in this image."
+                alert.runModal()
+                return
+            }
+            self.subjectMask = mask
+            self.checkpoint("Cut Out Subject")
+            self.canvas.backgroundRemoved = true
+            self.scheduleRender()
+        }
+    }
+
+    func restoreBackground() {
+        checkpoint("Restore Background")
+        canvas.backgroundRemoved = false
+        scheduleRender()
+    }
+
+    /// Recompute the mask if a loaded/undone state needs it but it isn't cached.
+    private func ensureMaskIfNeeded() {
+        guard canvas.backgroundRemoved, subjectMask == nil, let source = sourceImage,
+              !isComputingMask else { return }
+        isComputingMask = true
+        Task { [weak self] in
+            let mask = await SubjectMask.compute(for: source)
+            guard let self else { return }
+            self.isComputingMask = false
+            self.subjectMask = mask
+            if mask == nil { self.canvas.backgroundRemoved = false }
+            self.scheduleRender()
+        }
+    }
+
+    // MARK: - Result to clipboard
+
+    /// Flatten at canvas resolution and put a PNG + TIFF on the pasteboard.
+    func copyResultToPasteboard() {
+        let request = makeRenderRequest(renderScale: 1)
+        Task {
+            guard let cg = await RenderEngine.shared.render(request)?.cgImage else {
+                NSSound.beep(); return
+            }
+            let rep = NSBitmapImageRep(cgImage: cg)
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            if let png = rep.representation(using: .png, properties: [:]) {
+                pb.setData(png, forType: .png)
+            }
+            if let tiff = rep.tiffRepresentation {
+                pb.setData(tiff, forType: .tiff)
+            }
+        }
+    }
+
+    // MARK: - Saved Looks support
+
+    /// The current filter layers, bottom-to-top — what "Save Look" captures.
+    var currentFilterStack: [FilterInstance] {
+        layers.compactMap { $0.kind == .filter ? $0.filter : nil }
+    }
+
+    /// Insert an arbitrary filter stack as editable layers (saved Looks).
+    func applyFilterStack(name: String, instances: [FilterInstance]) {
+        checkpoint("Apply \(name)")
+        var idx = insertionIndex()
+        var lastID: UUID?
+        for instance in instances {
+            // Fresh identity so applying the same Look twice can't collide.
+            let fresh = FilterInstance(kind: instance.kind,
+                                       isEnabled: instance.isEnabled,
+                                       parameters: instance.parameters)
+            let layer = Layer(name: fresh.kind.displayName, kind: .filter, filter: fresh)
+            layers.insert(layer, at: idx)
+            lastID = layer.id
+            idx += 1
+        }
+        if let lastID { selectedLayerID = lastID }
+        editingFilterLayerID = nil
+        scheduleRender()
     }
 
     func duplicateLayer(_ id: UUID) {
@@ -307,7 +443,10 @@ final class FilteredDocument {
         DocumentSnapshot(
             canvas: .init(width: canvas.width, height: canvas.height,
                           background: canvas.background, imageFit: canvas.imageFit,
-                          dpi: canvas.dpi),
+                          dpi: canvas.dpi,
+                          orientationQuarters: canvas.orientationQuarters,
+                          flippedH: canvas.flippedH,
+                          backgroundRemoved: canvas.backgroundRemoved),
             layers: layers.map { l in
                 DocumentSnapshot.LayerState(
                     id: l.id, name: l.name, kind: l.kind.code,
@@ -324,6 +463,10 @@ final class FilteredDocument {
         canvas.background = snap.canvas.background
         canvas.imageFit = snap.canvas.imageFit
         canvas.dpi = snap.canvas.dpi
+        canvas.orientationQuarters = snap.canvas.orientationQuarters ?? 0
+        canvas.flippedH = snap.canvas.flippedH ?? false
+        canvas.backgroundRemoved = snap.canvas.backgroundRemoved ?? false
+        ensureMaskIfNeeded()
         layers = snap.layers.map { s in
             Layer(id: s.id, name: s.name, kind: LayerKind(s.kind),
                   isVisible: s.isVisible, opacity: s.opacity,
@@ -340,6 +483,8 @@ final class FilteredDocument {
 
     /// Replace the whole document with a loaded project file.
     func load(from file: FilteredProjectFile, url: URL) {
+        // A stale mask from the previous document must never apply here.
+        subjectMask = nil
         // Restore the source image first (if embedded).
         if let png = file.sourceImagePNG, let ci = ProjectIO.ciImage(from: png) {
             sourceImage = ci
@@ -439,6 +584,9 @@ final class FilteredDocument {
             background: canvas.background,
             imageFit: canvas.imageFit,
             renderScale: renderScale,
-            layers: renderLayers)
+            layers: renderLayers,
+            orientationQuarters: canvas.orientationQuarters,
+            flippedH: canvas.flippedH,
+            subjectMask: canvas.backgroundRemoved ? subjectMask : nil)
     }
 }

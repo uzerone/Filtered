@@ -75,6 +75,7 @@ enum ProjectIO {
             do {
                 try data.write(to: url, options: .atomic)
                 document.isDirty = false
+                AppSettings.shared.noteRecentProject(url)
                 return true
             } catch {
                 let alert = NSAlert()
@@ -107,6 +108,7 @@ enum ProjectIO {
             try data.write(to: url, options: .atomic)
             document.projectURL = url
             document.isDirty = false
+            AppSettings.shared.noteRecentProject(url)
             return true
         } catch {
             presentError("Couldn't save “\(url.lastPathComponent)”", error.localizedDescription)
@@ -135,6 +137,7 @@ enum ProjectIO {
             return
         }
         document.load(from: file, url: url)
+        AppSettings.shared.noteRecentProject(url)
     }
 
     @MainActor
