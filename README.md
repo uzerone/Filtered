@@ -4,6 +4,17 @@
 
 # Filtered
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Swift-6.3-F05138?logo=swift&logoColor=white" alt="Swift 6.3">
+  <img src="https://img.shields.io/badge/SwiftUI-0B84FF?logo=swift&logoColor=white" alt="SwiftUI">
+  <img src="https://img.shields.io/badge/Core%20Image-1C7EF3" alt="Core Image">
+  <img src="https://img.shields.io/badge/Metal-8A2BE2?logo=apple&logoColor=white" alt="Metal">
+  <img src="https://img.shields.io/badge/Vision-5E5CE6?logo=apple&logoColor=white" alt="Vision">
+  <img src="https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white" alt="macOS 15+">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/badge/status-in%20development-orange" alt="In development">
+</p>
+
 Fast filtering for images & designs — a native macOS app built with SwiftUI
 and Core Image. Made by [@uzerone](https://github.com/uzerone).
 
