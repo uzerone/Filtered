@@ -16,3 +16,6 @@ xcuserdata/
 
 # Orphaned early scaffold (superseded by Filtered/)
 FilterStudio/
+
+# Local agent instructions (kept out of the repo)
+CLAUDE.md
