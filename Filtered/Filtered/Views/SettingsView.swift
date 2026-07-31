@@ -140,12 +140,8 @@ private struct AboutSettings: View {
             Text("Fast filtering for images & designs")
                 .font(.callout).foregroundStyle(.secondary)
             Divider().frame(width: 200)
-            VStack(spacing: 4) {
-                Text("Made by JYEU@CTRLP")
-                    .font(.callout)
-                Text("Fast filtering for images & designs")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            Text("Made by JYEU@CTRLP")
+                .font(.callout)
             Text("Version 1.0")
                 .font(.caption2).foregroundStyle(.tertiary)
             Spacer()

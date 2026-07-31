@@ -109,6 +109,34 @@ struct FilterPickerGrid: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Looks: curated one-click filter stacks — the fast path.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Looks").font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(LookPreset.all) { look in
+                            Button {
+                                document.applyLook(look)
+                            } label: {
+                                VStack(spacing: 3) {
+                                    Image(systemName: look.icon)
+                                        .font(.system(size: 15, weight: .medium))
+                                        .frame(height: 18)
+                                    Text(look.name)
+                                        .font(.caption2)
+                                        .lineLimit(1)
+                                }
+                                .frame(width: 66, height: 48)
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Apply the \(look.name) look as editable filter layers")
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 2) {
                 Text("Add Filter Layer").font(.headline)
                 Text("Each filter is its own layer, affecting everything below it")
@@ -155,6 +183,7 @@ struct FilterLayerControls: View {
                     Spacer()
                     Toggle("", isOn: Binding(get: { layer.filter?.isEnabled ?? true },
                                              set: { v in
+                        document.checkpoint(v ? "Enable Filter" : "Disable Filter")
                         layer.filter?.isEnabled = v; document.scheduleRender()
                     }))
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
@@ -286,6 +315,8 @@ private struct ParamControl: View {
             }
             return .black
         } set: { c in
+            // Color-picker drags stream values; coalesce into one undo step.
+            document.coalescedCheckpoint(token: "param-\(filter.id)-\(spec.key)", name: spec.label)
             filter.parameters.set(spec.key, .color(RGBAColor(NSColor(c))))
             document.scheduleRender()
         }

@@ -32,7 +32,10 @@ struct ContentView: View {
                 .background(VisualEffect(material: .contentBackground).ignoresSafeArea())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Filtered")
+        // Window chrome tells the truth: which project, and whether it has
+        // unsaved edits.
+        .navigationTitle(document.projectName)
+        .navigationSubtitle(document.isDirty ? "Edited" : "")
         .toolbar { toolbarContent }
         .onChange(of: doc.requestImport) { _, want in
             if want { doc.requestImport = false; importImage() }
@@ -65,8 +68,35 @@ struct ContentView: View {
             Button {
                 document.addTextLayer()
             } label: { Label("Text", systemImage: "textformat") }
+        }
 
-            Spacer()
+        ToolbarItemGroup {
+            // Zoom menu: current % as the label, common levels inside.
+            Menu {
+                Button("Zoom In") { document.zoomIn() }
+                Button("Zoom Out") { document.zoomOut() }
+                Button("Zoom to Fit") { document.zoomToFit() }
+                Divider()
+                Button("50%") { document.canvasZoom = 0.5 }
+                Button("100%") { document.canvasZoom = 1 }
+                Button("200%") { document.canvasZoom = 2 }
+                Button("400%") { document.canvasZoom = 4 }
+            } label: {
+                Text("\(Int(document.canvasZoom * 100))%")
+                    .monospacedDigit()
+            }
+            .help("Zoom")
+
+            // Hold to compare with the unfiltered original (press-down feedback,
+            // release restores — Apple §1: respond on press, not release).
+            Image(systemName: document.isComparingOriginal ? "eye.fill" : "eye")
+                .foregroundStyle(document.isComparingOriginal ? Color.accentColor : .primary)
+                .onLongPressGesture(minimumDuration: .infinity) {
+                } onPressingChanged: { pressing in
+                    document.isComparingOriginal = pressing
+                }
+                .help("Hold to compare with original")
+                .accessibilityLabel("Compare with original")
 
             Button {
                 showExport = true

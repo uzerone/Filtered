@@ -55,32 +55,62 @@ final class FontManager {
     }
 
     // MARK: - Custom font import
+    //
+    // Imported fonts are COPIED into the app container and registered from the
+    // private copies. This is durable: no security-scoped bookmarks, no scope
+    // that must stay open while CoreText lazily maps glyph data, and fonts
+    // survive the original file being moved or deleted.
 
     /// Imported font file names (for display in Settings).
     private(set) var importedFontFiles: [(name: String, url: URL)] = []
 
-    /// Restore fonts imported in previous sessions from saved bookmarks.
+    /// The app-container directory that holds imported font copies.
+    private var fontsDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        return base.appendingPathComponent("Filtered/Fonts", isDirectory: true)
+    }
+
+    /// Register every font previously copied into the container. Also migrates
+    /// any fonts saved by the old bookmark system into the container.
     func restoreImportedFonts() {
-        var stillValid: [Data] = []
-        for data in AppSettings.shared.importedFontBookmarks {
-            var stale = false
-            guard let url = try? URL(resolvingBookmarkData: data,
-                                     options: [.withSecurityScope],
-                                     relativeTo: nil,
-                                     bookmarkDataIsStale: &stale) else { continue }
-            let ok = url.startAccessingSecurityScopedResource()
-            if register(url: url) != nil {
-                importedFontFiles.append((url.lastPathComponent, url))
-                stillValid.append(data)
+        let fm = FileManager.default
+        try? fm.createDirectory(at: fontsDirectory, withIntermediateDirectories: true)
+
+        // One-time migration from the old security-scoped-bookmark storage.
+        let oldBookmarks = AppSettings.shared.importedFontBookmarks
+        if !oldBookmarks.isEmpty {
+            for data in oldBookmarks {
+                var stale = false
+                guard let url = try? URL(resolvingBookmarkData: data,
+                                         options: [.withSecurityScope],
+                                         relativeTo: nil,
+                                         bookmarkDataIsStale: &stale) else { continue }
+                let ok = url.startAccessingSecurityScopedResource()
+                let dest = fontsDirectory.appendingPathComponent(url.lastPathComponent)
+                if !fm.fileExists(atPath: dest.path) {
+                    try? fm.copyItem(at: url, to: dest)
+                }
+                if ok { url.stopAccessingSecurityScopedResource() }
             }
-            if ok { url.stopAccessingSecurityScopedResource() }
+            AppSettings.shared.importedFontBookmarks = []
         }
-        AppSettings.shared.importedFontBookmarks = stillValid
+
+        // Register everything in the container.
+        let contents = (try? fm.contentsOfDirectory(at: fontsDirectory,
+                                                    includingPropertiesForKeys: nil)) ?? []
+        for url in contents where ["ttf", "otf", "ttc"].contains(url.pathExtension.lowercased()) {
+            if let ps = register(url: url) {
+                importedPostScriptNames.insert(ps)
+                importedFontFiles.append((url.lastPathComponent, url))
+            }
+        }
         reloadFamilies()
     }
 
-    /// Present an open panel and register the chosen font files. Returns the
-    /// PostScript name of the first newly available font, if any.
+    /// Present an open panel, copy the chosen font files into the container,
+    /// and register the copies. Returns the PostScript name of the first newly
+    /// available font, if any.
     @discardableResult
     func importFonts() -> String? {
         let panel = NSOpenPanel()
@@ -94,22 +124,21 @@ final class FontManager {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK else { return nil }
 
+        let fm = FileManager.default
+        try? fm.createDirectory(at: fontsDirectory, withIntermediateDirectories: true)
+
         var firstPS: String?
-        var newBookmarks = AppSettings.shared.importedFontBookmarks
         for url in panel.urls {
-            if let ps = register(url: url) {
+            let dest = fontsDirectory.appendingPathComponent(url.lastPathComponent)
+            if fm.fileExists(atPath: dest.path) { try? fm.removeItem(at: dest) }
+            guard (try? fm.copyItem(at: url, to: dest)) != nil else { continue }
+            if let ps = register(url: dest) {
                 importedPostScriptNames.insert(ps)
-                importedFontFiles.append((url.lastPathComponent, url))
+                importedFontFiles.removeAll { $0.name == dest.lastPathComponent }
+                importedFontFiles.append((dest.lastPathComponent, dest))
                 if firstPS == nil { firstPS = ps }
-                // Persist a security-scoped bookmark so it survives relaunch.
-                if let bm = try? url.bookmarkData(options: [.withSecurityScope],
-                                                  includingResourceValuesForKeys: nil,
-                                                  relativeTo: nil) {
-                    newBookmarks.append(bm)
-                }
             }
         }
-        AppSettings.shared.importedFontBookmarks = newBookmarks
         reloadFamilies()
         return firstPS
     }

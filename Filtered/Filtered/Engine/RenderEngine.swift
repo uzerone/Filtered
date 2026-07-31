@@ -27,6 +27,9 @@ actor RenderEngine {
 
     /// Render the request to a CGImage at canvasPixelSize * renderScale.
     func render(_ request: RenderRequest) -> SendableCGImage? {
+        // Renders serialize on this actor; a preview tick cancelled while
+        // waiting in line should not still pay for a full render.
+        guard !Task.isCancelled else { return nil }
         let scale = request.renderScale
         let outSize = CGSize(width: request.canvasPixelSize.width * scale,
                              height: request.canvasPixelSize.height * scale)

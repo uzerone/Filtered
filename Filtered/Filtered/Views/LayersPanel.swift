@@ -95,13 +95,19 @@ private struct LayerCard: View {
                     .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                     .frame(width: 18)
 
-                TextField("Layer name", text: $layer.name)
+                TextField("Layer name", text: Binding(
+                    get: { layer.name },
+                    set: { v in
+                        document.coalescedCheckpoint(token: "rename-\(layer.id)", name: "Rename Layer")
+                        layer.name = v
+                    }))
                     .textFieldStyle(.plain)
                     .font(.subheadline.weight(.medium))
 
                 Spacer()
 
                 Button {
+                    document.checkpoint("Toggle Visibility")
                     layer.isVisible.toggle()
                     document.scheduleRender()
                 } label: {
@@ -137,6 +143,11 @@ private struct LayerCard: View {
                 Button { move(up: false) } label: { Image(systemName: "chevron.down") }
                     .buttonStyle(.borderless).disabled(!canMoveDown)
                 Spacer()
+                Button {
+                    document.duplicateLayer(layer.id)
+                } label: { Image(systemName: "plus.square.on.square") }
+                    .buttonStyle(.borderless)
+                    .help("Duplicate Layer (⌘D)")
                 Button(role: .destructive) {
                     document.removeLayer(layer.id)
                 } label: { Image(systemName: "trash") }
@@ -148,6 +159,10 @@ private struct LayerCard: View {
         }
         .padding(10)
         .cardSurface(selected: isSelected)
+        .contextMenu {
+            Button("Duplicate") { document.duplicateLayer(layer.id) }
+            Button("Delete", role: .destructive) { document.removeLayer(layer.id) }
+        }
         .contentShape(Rectangle())
         // Double-click a filter layer opens its detail params;
         // single-click just selects (so you can keep adding filters).
@@ -181,16 +196,26 @@ struct CanvasSizeControl: View {
     /// read-only until the user unlocks.
     @State private var sizeLocked = false
 
+    /// Clamped dimension binding: rejects zero/negative/absurd sizes that
+    /// would produce an invalid render extent.
+    private func dimensionBinding(_ keyPath: ReferenceWritableKeyPath<CanvasSettings, Int>) -> Binding<Int> {
+        Binding {
+            document.canvas[keyPath: keyPath]
+        } set: { v in
+            document.canvas[keyPath: keyPath] = min(max(v, 1), 16384)
+        }
+    }
+
     var body: some View {
         @Bindable var doc = document
         VStack(alignment: .leading, spacing: 8) {
             Text("Canvas").font(.headline)
             // W × H, a lock toggle, and the Presets menu — all on one row.
             HStack(spacing: 4) {
-                LabeledStepperField(label: "W", value: $doc.canvas.width)
+                LabeledStepperField(label: "W", value: dimensionBinding(\.width))
                     .disabled(sizeLocked)
                 Text("×").foregroundStyle(.secondary).font(.caption)
-                LabeledStepperField(label: "H", value: $doc.canvas.height)
+                LabeledStepperField(label: "H", value: dimensionBinding(\.height))
                     .disabled(sizeLocked)
 
                 Button {
@@ -207,6 +232,7 @@ struct CanvasSizeControl: View {
                         Section(group.title) {
                             ForEach(group.presets) { preset in
                                 Button("\(preset.name)  (\(preset.width)×\(preset.height))") {
+                                    document.checkpoint("Canvas Preset")
                                     document.canvas.apply(preset)
                                     document.scheduleRender()
                                 }
@@ -223,14 +249,19 @@ struct CanvasSizeControl: View {
                 .help("Size presets")
             }
 
-            Picker("Fit", selection: $doc.canvas.imageFit) {
+            Picker("Fit", selection: Binding(
+                get: { document.canvas.imageFit },
+                set: { v in
+                    document.checkpoint("Image Fit")
+                    document.canvas.imageFit = v
+                    document.scheduleRender()
+                })) {
                 ForEach(ImageFit.allCases) { fit in
                     Text(fit.displayName).tag(fit)
                 }
             }
             .pickerStyle(.segmented)
             .font(.caption)
-            .onChange(of: doc.canvas.imageFit) { _, _ in document.scheduleRender() }
 
             HStack(spacing: 6) {
                 Text("BG").font(.caption).foregroundStyle(.secondary)
@@ -256,6 +287,7 @@ struct CanvasSizeControl: View {
             case .solid(let c): return c.r < 0.5 ? 1 : 2
             }
         } set: { newValue in
+            document.checkpoint("Background")
             switch newValue {
             case 0: document.canvas.background = .transparent
             case 1: document.canvas.background = .solid(.black)

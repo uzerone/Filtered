@@ -25,7 +25,8 @@ enum CIFilterFactory {
         case .gradientMap:
             return applyGradientMap(params, to: input)
         case .glass:
-            return applyGlass(params, to: input, extent: extent, cache: textureCache)
+            return applyGlass(params, to: input, extent: extent,
+                              renderScale: renderScale, cache: textureCache)
         case .invert:
             let f = CIFilter.colorInvert()
             f.inputImage = input
@@ -35,11 +36,11 @@ enum CIFilterFactory {
         case .scanlines:
             return applyScanlines(params, to: input, extent: extent)
         case .glitch:
-            return applyGlitch(params, to: input, extent: extent)
+            return applyGlitch(params, to: input, extent: extent, renderScale: renderScale)
         case .ascii:
             return applyASCII(params, to: input, extent: extent)
         case .pixelSort:
-            return applyPixelSort(params, to: input, extent: extent)
+            return applyPixelSort(params, to: input, extent: extent, renderScale: renderScale)
         default:
             return applyStock(kind: kind, params: params, to: input, extent: extent)
         }
@@ -53,9 +54,10 @@ enum CIFilterFactory {
                                    extent: CGRect) -> CIImage {
         guard let ciName = stockCIName(for: kind),
               let filter = CIFilter(name: ciName) else { return input }
-        // Radius-based stylize filters (bloom/edges/blur-like) sample neighbors;
-        // clamp so image edges don't darken to transparent.
-        let clampNeeded: Set<FilterKind> = [.bloom, .edges, .crystallize, .pointillize]
+        // Convolving filters sample neighbors; clamp so image edges don't
+        // darken toward transparent (audited: 44% corner falloff on blur).
+        let clampNeeded: Set<FilterKind> = [.bloom, .edges, .crystallize, .pointillize,
+                                            .blur, .unsharpMask, .sharpenLuminance]
         let fed = clampNeeded.contains(kind) ? input.clampedToExtent() : input
         filter.setValue(fed, forKey: kCIInputImageKey)
 
@@ -190,9 +192,11 @@ enum CIFilterFactory {
     private static func applyGlass(_ params: FilterParameters,
                                    to input: CIImage,
                                    extent: CGRect,
+                                   renderScale: Double,
                                    cache: GlassTextureCache) -> CIImage {
         let scale = params["inputScale"]?.doubleValue ?? 120
-        let texture = cache.texture(for: extent)
+        // Texture cell size scales with resolution so preview matches export.
+        let texture = cache.texture(for: extent, cellScale: renderScale)
 
         guard let filter = CIFilter(name: "CIGlassDistortion") else { return input }
         filter.setValue(input, forKey: kCIInputImageKey)
@@ -279,7 +283,8 @@ enum CIFilterFactory {
 
     private static func applyGlitch(_ params: FilterParameters,
                                     to input: CIImage,
-                                    extent: CGRect) -> CIImage {
+                                    extent: CGRect,
+                                    renderScale: Double) -> CIImage {
         let amount = params["amount"]?.doubleValue ?? 0.5
         let seed = params["seed"]?.doubleValue ?? 7
         let sliceH = max(params["sliceHeight"]?.doubleValue ?? 20, 2)
@@ -289,7 +294,8 @@ enum CIFilterFactory {
         var result = src
 
         // 1. RGB channel split (chromatic shift) proportional to amount.
-        let shift = CGFloat(amount * 14)
+        //    Pixel constants scale with renderScale so export matches preview.
+        let shift = CGFloat(amount * 14 * renderScale)
         func chan(_ r: Double, _ g: Double, _ b: Double, dx: CGFloat) -> CIImage {
             let m = CIFilter.colorMatrix()
             m.inputImage = src
@@ -319,7 +325,7 @@ enum CIFilterFactory {
             let bandRect = CGRect(x: extent.minX, y: extent.minY + y,
                                   width: extent.width, height: CGFloat(sliceH))
             let dir: CGFloat = seededRand.next01() < 0.5 ? -1 : 1
-            let dx = dir * CGFloat(seededRand.next01()) * 60 * CGFloat(amount)
+            let dx = dir * CGFloat(seededRand.next01()) * 60 * CGFloat(amount * renderScale)
             let slice = result.cropped(to: bandRect)
                 .transformed(by: CGAffineTransform(translationX: dx, y: 0))
             composed = slice.composited(over: composed)
@@ -368,13 +374,14 @@ enum CIFilterFactory {
 
     private static func applyPixelSort(_ params: FilterParameters,
                                        to input: CIImage,
-                                       extent: CGRect) -> CIImage {
+                                       extent: CGRect,
+                                       renderScale: Double) -> CIImage {
         let amount = params["amount"]?.doubleValue ?? 0.5
         guard amount > 0 else { return input }
         // Motion blur creates the horizontal "sorted streak" look.
         guard let mb = CIFilter(name: "CIMotionBlur") else { return input }
         mb.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
-        mb.setValue((amount * 60) as NSNumber, forKey: "inputRadius")
+        mb.setValue((amount * 60 * renderScale) as NSNumber, forKey: "inputRadius")
         mb.setValue(0 as NSNumber, forKey: "inputAngle")   // horizontal
         let blurred = (mb.outputImage ?? input).cropped(to: extent)
         // Blend blurred streaks over original by amount using lighten.
@@ -398,25 +405,36 @@ struct SeededRandom {
     }
 }
 
-/// Caches the frosted-glass displacement texture per extent so preview & export
-/// use consistent glass cells. Not Sendable state — owned by the RenderEngine actor.
+/// Caches the frosted-glass displacement texture per (extent, cellScale) so
+/// preview & export use consistent glass cells at their respective resolutions.
+/// Not Sendable state — owned by the RenderEngine actor.
 final class GlassTextureCache {
-    private var cached: (size: CGSize, image: CIImage)?
+    private var cached: (size: CGSize, cellScale: Double, image: CIImage)?
 
-    func texture(for extent: CGRect) -> CIImage {
-        if let c = cached, c.size == extent.size { return c.image }
-        // A lightly-scaled-up sharp noise gives strong local gradients — which is
-        // what drives CIGlassDistortion's refraction. A heavy blur flattens the
-        // gradients and the effect nearly vanishes, so keep the noise crisp and
-        // just enlarge the cells with a mild pixellate for a "glass block" feel.
+    func texture(for extent: CGRect, cellScale: Double) -> CIImage {
+        if let c = cached, c.size == extent.size, c.cellScale == cellScale { return c.image }
+        // Generate the texture at REFERENCE (1×) resolution and upscale it to
+        // the target. This way preview and export see the SAME cell pattern,
+        // just at different resolutions — sampling fresh noise per resolution
+        // would produce a different glass pattern at export than in preview.
+        //
+        // Sharp noise gives strong local gradients — which is what drives
+        // CIGlassDistortion's refraction; a mild pixellate makes "glass blocks".
+        let scale = max(cellScale, 0.01)
+        let baseRect = CGRect(x: 0, y: 0,
+                              width: max(extent.width / scale, 1),
+                              height: max(extent.height / scale, 1))
         let noise = (CIFilter.randomGenerator().outputImage ?? CIImage.empty())
-            .cropped(to: extent)
+            .cropped(to: baseRect)
         let px = CIFilter.pixellate()
         px.inputImage = noise
-        px.scale = 6                      // small blocks → chunky glass cells
-        px.center = CGPoint(x: extent.midX, y: extent.midY)
-        let tex = (px.outputImage ?? noise).cropped(to: extent)
-        cached = (extent.size, tex)
+        px.scale = 6
+        px.center = CGPoint(x: baseRect.midX, y: baseRect.midY)
+        let baseTex = (px.outputImage ?? noise).cropped(to: baseRect)
+        let tex = baseTex
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .cropped(to: extent)
+        cached = (extent.size, cellScale, tex)
         return tex
     }
 }

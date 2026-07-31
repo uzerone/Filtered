@@ -97,6 +97,8 @@ struct TextInspectorView: View {
     }
 
     // MARK: bindings into layer.text (TextContent)
+    // Styling bindings deliberately do NOT touch layer.name (a custom layer
+    // name must survive font-size tweaks); only typing new text renames.
     private func bindText<T>(_ keyPath: WritableKeyPath<TextContent, T>, default def: T) -> Binding<T> {
         Binding {
             layer.text?[keyPath: keyPath] ?? def
@@ -104,7 +106,6 @@ struct TextInspectorView: View {
             var t = layer.text ?? TextContent()
             t[keyPath: keyPath] = v
             layer.text = t
-            layer.name = String((layer.text?.string ?? "Text").prefix(12))
             document.scheduleRender()
         }
     }
@@ -113,7 +114,10 @@ struct TextInspectorView: View {
         Binding {
             layer.text?.string ?? ""
         } set: { v in
-            if !document.isContinuousEditing { document.checkpoint("Edit Text") }
+            // One undo step per typing session, not per keystroke: the token
+            // coalesces consecutive edits to this layer's text until another
+            // action (slider, add layer, …) checkpoints and breaks the run.
+            document.coalescedCheckpoint(token: "text-\(layer.id)", name: "Edit Text")
             var t = layer.text ?? TextContent()
             t.string = v
             layer.text = t
@@ -136,6 +140,8 @@ struct TextInspectorView: View {
         Binding {
             Color((layer.text?.color ?? .white).nsColor)
         } set: { c in
+            // Color-picker drags stream values; coalesce into one undo step.
+            document.coalescedCheckpoint(token: "textcolor-\(layer.id)", name: "Text Color")
             var t = layer.text ?? TextContent()
             t.color = RGBAColor(NSColor(c))
             layer.text = t

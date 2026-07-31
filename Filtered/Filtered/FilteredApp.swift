@@ -1,10 +1,38 @@
 import SwiftUI
+import AppKit
+
+/// App delegate: guards quit while there are unsaved changes.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var document: FilteredDocument?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let doc = Self.document, doc.isDirty else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Save changes to “\(doc.projectName)”?"
+        alert.informativeText = "Your changes will be lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return ProjectIO.save(document: doc) ? .terminateNow : .terminateCancel
+        case .alertSecondButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
+}
 
 @main
 struct FilteredApp: App {
-    @State private var document = FilteredDocument()
+    @State private var document: FilteredDocument
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        let doc = FilteredDocument()
+        _document = State(initialValue: doc)
+        AppDelegate.document = doc
         // Re-register fonts imported in previous sessions.
         FontManager.shared.restoreImportedFonts()
     }
@@ -57,13 +85,39 @@ struct FilteredApp: App {
             // Edit menu additions
             CommandGroup(after: .pasteboard) {
                 Divider()
+                // ⇧⌘V so plain ⌘V still pastes text inside text fields.
+                Button("Paste Image") {
+                    if let (image, size) = ImageImporter.loadFromPasteboard() {
+                        document.setSourceImage(image, pixelSize: size)
+                    } else {
+                        NSSound.beep()
+                    }
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
                 Button("Add Text Layer") { document.addTextLayer() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                Divider()
+                Button("Duplicate Layer") {
+                    if let id = document.selectedLayerID { document.duplicateLayer(id) }
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(document.selectedLayerID == nil)
                 Button("Delete Selected Layer") {
                     if let id = document.selectedLayerID { document.removeLayer(id) }
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(document.selectedLayerID == nil)
+            }
+            // Zoom — inserted into the system View menu (a CommandMenu("View")
+            // would create a duplicate menu next to the built-in one).
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Button("Zoom In") { document.zoomIn() }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("Zoom Out") { document.zoomOut() }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Zoom to Fit") { document.zoomToFit() }
+                    .keyboardShortcut("0", modifiers: .command)
             }
         }
 

@@ -18,6 +18,15 @@ final class FilteredDocument {
     /// Display name for the window title.
     var projectName: String { projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled" }
 
+    /// True when there are edits not yet saved to the project file.
+    var isDirty = false
+
+    /// While true, the preview renders with all filter layers bypassed —
+    /// the press-and-hold "before/after" compare.
+    var isComparingOriginal = false {
+        didSet { if isComparingOriginal != oldValue { scheduleRender() } }
+    }
+
     /// The filter layer whose DETAIL settings are open (entered via double-click).
     /// While nil (or not matching the selection), a selected filter layer just
     /// shows the "add filter" picker so the user can keep stacking filters.
@@ -58,7 +67,18 @@ final class FilteredDocument {
     var requestImport = false
     var requestExport = false
 
-    private var renderTask: Task<Void, Never>?
+    @ObservationIgnored private var renderTask: Task<Void, Never>?
+
+    /// The canvas view reports its on-screen pixel width here (fitted width ×
+    /// backing scale × zoom) so previews render at display resolution instead
+    /// of full canvas resolution. 0 = unknown → render at 1:1.
+    @ObservationIgnored var previewPixelWidth: Double = 0
+
+    /// Preview render scale: never upscale past 1 (export always renders 1+).
+    private var previewScale: Double {
+        guard previewPixelWidth > 0, canvas.width > 0 else { return 1 }
+        return min(1, previewPixelWidth / Double(canvas.width))
+    }
 
     var selectedLayer: Layer? {
         guard let id = selectedLayerID else { return nil }
@@ -66,6 +86,22 @@ final class FilteredDocument {
     }
 
     var baseImage: CIImage? { sourceImage }
+
+    // MARK: - Canvas viewport (zoom & pan)
+
+    var canvasZoom: Double = 1 {
+        didSet {
+            let clamped = min(max(canvasZoom, 0.25), 8)
+            if canvasZoom != clamped { canvasZoom = clamped }
+            if canvasZoom == 1 { canvasPanX = 0; canvasPanY = 0 }
+        }
+    }
+    var canvasPanX: Double = 0
+    var canvasPanY: Double = 0
+
+    func zoomIn()  { canvasZoom = min(canvasZoom * 1.25, 8) }
+    func zoomOut() { canvasZoom = max(canvasZoom / 1.25, 0.25) }
+    func zoomToFit() { canvasZoom = 1; canvasPanX = 0; canvasPanY = 0 }
 
     // MARK: - Document lifecycle
 
@@ -75,7 +111,11 @@ final class FilteredDocument {
         sourcePixelSize = nil
         previewImage = nil
         selectedLayerID = nil
+        editingFilterLayerID = nil
+        projectURL = nil
+        isDirty = false
         canvas = CanvasSettings()
+        clearUndoHistory()
         scheduleRender()
     }
 
@@ -93,6 +133,7 @@ final class FilteredDocument {
             canvas.width = Int(pixelSize.width)
             canvas.height = Int(pixelSize.height)
         }
+        isDirty = true
         scheduleRender()
     }
 
@@ -112,13 +153,53 @@ final class FilteredDocument {
     func addFilter(_ kind: FilterKind) {
         checkpoint("Add \(kind.displayName)")
         let layer = Layer.filterLayer(kind)
+        layers.insert(layer, at: insertionIndex())
+        selectedLayerID = layer.id
+        scheduleRender()
+    }
+
+    /// Apply a Look: insert its whole filter stack as editable filter layers.
+    func applyLook(_ look: LookPreset) {
+        checkpoint("Apply \(look.name)")
+        var idx = insertionIndex()
+        var lastID: UUID?
+        for instance in look.instances() {
+            let layer = Layer(name: instance.kind.displayName, kind: .filter, filter: instance)
+            layers.insert(layer, at: idx)
+            lastID = layer.id
+            idx += 1
+        }
+        if let lastID { selectedLayerID = lastID }
+        editingFilterLayerID = nil
+        scheduleRender()
+    }
+
+    /// Where a new filter layer goes: just above the selection, else on top.
+    private func insertionIndex() -> Int {
         if let sel = selectedLayerID,
            let idx = layers.firstIndex(where: { $0.id == sel }) {
-            layers.insert(layer, at: idx + 1)
-        } else {
-            layers.append(layer)
+            return idx + 1
         }
-        selectedLayerID = layer.id
+        return layers.count
+    }
+
+    func duplicateLayer(_ id: UUID) {
+        guard let idx = layers.firstIndex(where: { $0.id == id }) else { return }
+        checkpoint("Duplicate Layer")
+        let src = layers[idx]
+        let copy = Layer(name: src.name,
+                        kind: src.kind,
+                        isVisible: src.isVisible,
+                        opacity: src.opacity,
+                        filter: src.filter,
+                        text: src.text,
+                        // Nudge duplicated text so it's visibly a copy.
+                        position: src.kind == .text
+                            ? Point2D(x: min(src.position.x + 0.03, 1), y: min(src.position.y + 0.03, 1))
+                            : src.position,
+                        rotation: src.rotation)
+        layers.insert(copy, at: idx + 1)
+        selectedLayerID = copy.id
         scheduleRender()
     }
 
@@ -126,6 +207,7 @@ final class FilteredDocument {
         checkpoint("Delete Layer")
         layers.removeAll { $0.id == id }
         if selectedLayerID == id { selectedLayerID = layers.last?.id }
+        if editingFilterLayerID == id { editingFilterLayerID = nil }
         scheduleRender()
     }
 
@@ -137,12 +219,15 @@ final class FilteredDocument {
 
     // MARK: - Undo / Redo (snapshot stacks)
 
-    private var undoStack: [DocumentSnapshot] = []
-    private var redoStack: [DocumentSnapshot] = []
+    @ObservationIgnored private var undoStack: [DocumentSnapshot] = []
+    @ObservationIgnored private var redoStack: [DocumentSnapshot] = []
     private let undoLimit = 100
+    /// Observable mirror so menu items enable/disable correctly.
+    private(set) var undoCount = 0
+    private(set) var redoCount = 0
 
-    var canUndo: Bool { !undoStack.isEmpty }
-    var canRedo: Bool { !redoStack.isEmpty }
+    var canUndo: Bool { undoCount > 0 }
+    var canRedo: Bool { redoCount > 0 }
 
     /// Capture the current state before a mutation. Call at the START of any
     /// undoable action. Continuous edits (slider drags) should call
@@ -151,9 +236,25 @@ final class FilteredDocument {
         undoStack.append(currentSnapshot())
         if undoStack.count > undoLimit { undoStack.removeFirst() }
         redoStack.removeAll()
+        coalesceToken = nil
+        isDirty = true
+        syncUndoCounts()
     }
 
-    private var continuousActive = false
+    /// Coalesced checkpoint for typing: only the FIRST call with a given token
+    /// creates an undo step; subsequent calls with the same token are absorbed
+    /// until another (regular) checkpoint intervenes.
+    @ObservationIgnored private var coalesceToken: String?
+    func coalescedCheckpoint(token: String, name: String = "") {
+        guard token != coalesceToken else {
+            isDirty = true
+            return
+        }
+        checkpoint(name)
+        coalesceToken = token
+    }
+
+    @ObservationIgnored private var continuousActive = false
     var isContinuousEditing: Bool { continuousActive }
     /// For slider/drag edits: checkpoint once at gesture start, ignore until end.
     func beginContinuousEdit(_ name: String = "") {
@@ -165,16 +266,41 @@ final class FilteredDocument {
 
     func undo() {
         guard let snap = undoStack.popLast() else { return }
+        endContinuousEdit()
+        coalesceToken = nil
         redoStack.append(currentSnapshot())
         restore(snap)
+        postRestoreCleanup()
+        isDirty = true
+        syncUndoCounts()
         scheduleRender()
     }
 
     func redo() {
         guard let snap = redoStack.popLast() else { return }
+        endContinuousEdit()
+        coalesceToken = nil
         undoStack.append(currentSnapshot())
         restore(snap)
+        postRestoreCleanup()
+        isDirty = true
+        syncUndoCounts()
         scheduleRender()
+    }
+
+    /// Drop references to layers that no longer exist after a restore.
+    private func postRestoreCleanup() {
+        if let sel = selectedLayerID, !layers.contains(where: { $0.id == sel }) {
+            selectedLayerID = layers.last?.id
+        }
+        if let ed = editingFilterLayerID, !layers.contains(where: { $0.id == ed }) {
+            editingFilterLayerID = nil
+        }
+    }
+
+    private func syncUndoCounts() {
+        undoCount = undoStack.count
+        redoCount = redoStack.count
     }
 
     private func currentSnapshot() -> DocumentSnapshot {
@@ -228,7 +354,9 @@ final class FilteredDocument {
         }
         // Restore editable state.
         restore(file.snapshot)
+        postRestoreCleanup()
         projectURL = url
+        isDirty = false
         // Fresh undo history for the loaded doc.
         clearUndoHistory()
         scheduleRender()
@@ -237,35 +365,38 @@ final class FilteredDocument {
     private func clearUndoHistory() {
         undoStack.removeAll()
         redoStack.removeAll()
+        coalesceToken = nil
+        syncUndoCounts()
     }
 
     // MARK: - Preview rendering (debounced, single in-flight)
 
-    /// Call after ANY change that affects the pixels. Reads state synchronously
-    /// on the main actor into a Sendable snapshot, then renders off-actor.
+    /// Call after ANY change that affects the pixels. The Sendable snapshot is
+    /// built AFTER the debounce (still on the main actor — the Task inherits
+    /// @MainActor isolation), so rapid slider ticks cost almost nothing: no
+    /// text rasterization, no snapshot work for cancelled ticks.
     func scheduleRender() {
         renderTask?.cancel()
-        let request = makeRenderRequest(renderScale: 1)
         isRendering = true
         renderTask = Task { [weak self] in
-            // Small debounce so slider drags don't storm the engine.
+            // Debounce: coalesce slider-drag ticks.
             try? await Task.sleep(nanoseconds: 16_000_000)
-            if Task.isCancelled { return }
+            guard !Task.isCancelled, let self else { return }
+            // Preview renders at display resolution, not canvas resolution.
+            let request = self.makeRenderRequest(renderScale: self.previewScale)
             let result = await RenderEngine.shared.render(request)
-            if Task.isCancelled { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.isRendering = false
-                if let cg = result?.cgImage {
-                    self.previewImage = NSImage(cgImage: cg,
-                                                size: NSSize(width: cg.width, height: cg.height))
-                }
+            guard !Task.isCancelled else { return }
+            self.isRendering = false
+            if let cg = result?.cgImage {
+                self.previewImage = NSImage(cgImage: cg,
+                                            size: NSSize(width: cg.width, height: cg.height))
             }
         }
     }
 
     /// Build a Sendable snapshot of the current state. Synchronous, @MainActor.
-    /// Text layers are pre-rendered here (TextRenderer is @MainActor).
+    /// Text layers are rasterized here via a per-layer cache (only re-rendered
+    /// when the text content or scale actually changed).
     func makeRenderRequest(renderScale: Double) -> RenderRequest {
         var renderLayers: [RenderLayer] = []
         for layer in layers {
@@ -280,7 +411,7 @@ final class FilteredDocument {
                     position: layer.position,
                     rotation: layer.rotation))
             case .text:
-                let ci = layer.text.flatMap { TextRenderer.render($0, scale: renderScale) }
+                let ci = layer.cachedTextImage(scale: renderScale)
                 renderLayers.append(RenderLayer(
                     kind: .text,
                     isVisible: layer.isVisible,
@@ -292,7 +423,8 @@ final class FilteredDocument {
             case .filter:
                 renderLayers.append(RenderLayer(
                     kind: .filter,
-                    isVisible: layer.isVisible,
+                    // Before/after compare bypasses every filter layer.
+                    isVisible: layer.isVisible && !isComparingOriginal,
                     opacity: layer.opacity,
                     filter: layer.filter,
                     textImage: nil,

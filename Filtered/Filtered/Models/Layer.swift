@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CoreImage
 
 /// What a layer contains.
 enum LayerKind: Sendable, Equatable {
@@ -55,6 +56,32 @@ final class Layer: Identifiable {
         self.text = text
         self.position = position
         self.rotation = rotation
+    }
+
+    // MARK: Text rasterization cache
+    // Re-rendering a text layer's bitmap on every preview tick is wasteful and
+    // ran on the main thread per slider tick. Cache the CIImage keyed by
+    // (content hash, scale); @ObservationIgnored so cache writes don't trigger
+    // SwiftUI invalidation loops.
+    @ObservationIgnored private var textCacheKey: Int = 0
+    @ObservationIgnored private var textCacheScale: Double = -1
+    @ObservationIgnored private var textCacheImage: CIImage?
+
+    /// Rasterized text image for this layer at `scale`, re-rendered only when
+    /// the text content or scale changed since the last call.
+    func cachedTextImage(scale: Double) -> CIImage? {
+        guard let content = text else { return nil }
+        var hasher = Hasher()
+        content.hash(into: &hasher)
+        let key = hasher.finalize()
+        if key == textCacheKey, scale == textCacheScale, let cached = textCacheImage {
+            return cached
+        }
+        let rendered = TextRenderer.render(content, scale: scale)
+        textCacheKey = key
+        textCacheScale = scale
+        textCacheImage = rendered
+        return rendered
     }
 
     static func imageLayer() -> Layer {

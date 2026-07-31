@@ -17,11 +17,38 @@ enum ImageImporter {
     }
 
     static func load(url: URL) -> (CIImage, Size2D)? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
-        let ci = CIImage(cgImage: cg)
-        let size = Size2D(width: Double(cg.width), height: Double(cg.height))
+        // applyOrientationProperty bakes the EXIF orientation into the image so
+        // phone photos load upright instead of sideways.
+        guard let ci = CIImage(contentsOf: url, options: [.applyOrientationProperty: true])
+        else { return nil }
+        let size = Size2D(width: ci.extent.width, height: ci.extent.height)
         return (ci, size)
+    }
+
+    /// Import from raw image data (clipboard paste, drag & drop providers).
+    static func load(data: Data) -> (CIImage, Size2D)? {
+        guard let ci = CIImage(data: data, options: [.applyOrientationProperty: true])
+        else { return nil }
+        let size = Size2D(width: ci.extent.width, height: ci.extent.height)
+        return (ci, size)
+    }
+
+    /// Import from the general pasteboard: copied image files first, then
+    /// raw image data (e.g. a screenshot or an image copied from a browser).
+    @MainActor
+    static func loadFromPasteboard() -> (CIImage, Size2D)? {
+        let pb = NSPasteboard.general
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingContentsConformToTypes: [UTType.image.identifier]
+        ]) as? [URL], let url = urls.first {
+            return load(url: url)
+        }
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = pb.data(forType: type) {
+                return load(data: data)
+            }
+        }
+        return nil
     }
 }
 
@@ -102,21 +129,55 @@ enum ImageExporter {
         let request = document.makeRenderRequest(renderScale: scale)
         let result = await RenderEngine.shared.render(request)
         guard var cg = result?.cgImage else {
-            NSSound.beep(); return
+            presentError("Export failed", "The image could not be rendered.")
+            return
+        }
+        // The render pipeline is uniform-scale only (pixel-space filter params
+        // multiply by renderScale). If the user chose free-ratio custom
+        // dimensions, resample the rendered image to the exact W×H now.
+        let (targetW, targetH) = options.outputSize(canvasWidth: document.canvas.width,
+                                                    canvasHeight: document.canvas.height)
+        if targetW > 0, targetH > 0, (cg.width != targetW || cg.height != targetH) {
+            if let resized = resample(cg, to: targetW, height: targetH) { cg = resized }
         }
         // Optional author watermark, drawn at full resolution.
         let settings = AppSettings.shared
         if settings.addWatermark {
-            let text = settings.watermarkText.isEmpty ? settings.authorCredit : settings.watermarkText
-            if !text.isEmpty, let stamped = drawWatermark(text, on: cg) { cg = stamped }
+            var text = settings.watermarkText.isEmpty ? settings.authorCredit : settings.watermarkText
+            if text.isEmpty { text = "Filtered" }   // matches the Settings placeholder
+            if let stamped = drawWatermark(text, on: cg) { cg = stamped }
         }
-        write(cgImage: cg, to: url, options: options,
-              author: settings.embedAuthorMetadata ? settings.authorCredit : nil)
+        if !write(cgImage: cg, to: url, options: options,
+                  author: settings.embedAuthorMetadata ? settings.authorCredit : nil) {
+            presentError("Export failed", "The file could not be written to \(url.lastPathComponent).")
+        }
     }
 
-    static func write(cgImage: CGImage, to url: URL, options: ExportOptions, author: String? = nil) {
+    /// Stretch-resample to exact pixel dimensions (free-ratio custom export).
+    private static func resample(_ cg: CGImage, to width: Int, height: Int) -> CGImage? {
+        guard let ctx = CGContext(data: nil, width: width, height: height,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage()
+    }
+
+    @MainActor
+    private static func presentError(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
+    @discardableResult
+    static func write(cgImage: CGImage, to url: URL, options: ExportOptions, author: String? = nil) -> Bool {
         guard let dest = CGImageDestinationCreateWithURL(
-            url as CFURL, options.format.utType.identifier as CFString, 1, nil) else { return }
+            url as CFURL, options.format.utType.identifier as CFString, 1, nil) else { return false }
         var props: [CFString: Any] = [:]
         if options.format.isLossy {
             props[kCGImageDestinationLossyCompressionQuality] = options.quality
@@ -134,7 +195,7 @@ enum ImageExporter {
             ] as [CFString: Any]
         }
         CGImageDestinationAddImage(dest, cgImage, props as CFDictionary)
-        CGImageDestinationFinalize(dest)
+        return CGImageDestinationFinalize(dest)
     }
 
     /// Draws a small semi-transparent watermark in the bottom-right corner.
