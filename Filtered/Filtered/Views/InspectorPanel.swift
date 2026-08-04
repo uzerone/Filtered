@@ -229,6 +229,10 @@ struct ImageToolsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Image").font(.headline)
 
+            if document.baseImage != nil {
+                HistogramView()
+            }
+
             HStack(spacing: 6) {
                 Button { document.rotateCounterclockwise() } label: {
                     Image(systemName: "rotate.left")
@@ -396,7 +400,7 @@ private struct ParamControl: View {
             HStack {
                 Text(spec.label).font(.caption)
                 Spacer()
-                Text(String(format: "%.1f", currentDouble)).font(.caption).monospacedDigit()
+                Text(String(format: readoutFormat, currentDouble)).font(.caption).monospacedDigit()
                     .foregroundStyle(.secondary)
             }
             Slider(value: doubleBinding, in: spec.min...spec.max) { editing in
@@ -437,6 +441,13 @@ private struct ParamControl: View {
     // MARK: bindings
     private var currentDouble: Double {
         filter.parameters[spec.key]?.doubleValue ?? spec.def
+    }
+    /// Precision matched to the parameter's range: fine ranges (noise level)
+    /// need 3 decimals, big ranges (Kelvin) read best as integers.
+    private var readoutFormat: String {
+        if spec.max - spec.min <= 0.5 { return "%.3f" }
+        if spec.max >= 100 { return "%.0f" }
+        return "%.1f"
     }
     private var doubleBinding: Binding<Double> {
         Binding {

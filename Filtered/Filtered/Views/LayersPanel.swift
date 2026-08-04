@@ -222,7 +222,11 @@ struct CanvasSizeControl: View {
         Binding {
             document.canvas[keyPath: keyPath]
         } set: { v in
-            document.canvas[keyPath: keyPath] = min(max(v, 1), 16384)
+            let clamped = min(max(v, 1), 16384)
+            guard clamped != document.canvas[keyPath: keyPath] else { return }
+            // One undo step per typing session, not per digit.
+            document.coalescedCheckpoint(token: "canvas-size", name: "Canvas Size")
+            document.canvas[keyPath: keyPath] = clamped
         }
     }
 

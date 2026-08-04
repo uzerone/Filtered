@@ -157,6 +157,13 @@ struct FilteredApp: App {
                     .keyboardShortcut("-", modifiers: .command)
                 Button("Zoom to Fit") { document.zoomToFit() }
                     .keyboardShortcut("0", modifiers: .command)
+                Divider()
+                // Toggle sibling of the hold-to-compare toolbar eye.
+                Button(document.isComparingOriginal ? "Show Edited" : "Compare with Original") {
+                    document.isComparingOriginal.toggle()
+                }
+                .keyboardShortcut("\\", modifiers: .command)
+                .disabled(document.baseImage == nil)
             }
         }
 

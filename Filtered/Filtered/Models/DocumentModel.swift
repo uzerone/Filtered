@@ -105,7 +105,29 @@ final class FilteredDocument {
 
     // MARK: - Document lifecycle
 
+    /// Ask before destroying unsaved work (New Canvas / Open Project). Returns
+    /// true when it's safe to proceed — either the doc is clean, the user saved,
+    /// or the user chose to discard. Mirrors the quit-time guard in AppDelegate.
+    func confirmDiscardChanges() -> Bool {
+        guard isDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Save changes to “\(projectName)”?"
+        alert.informativeText = "Your changes will be lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return ProjectIO.save(document: self)
+        case .alertSecondButtonReturn:
+            return true
+        default:
+            return false
+        }
+    }
+
     func newCanvas() {
+        guard confirmDiscardChanges() else { return }
         layers = []
         sourceImage = nil
         sourcePixelSize = nil
@@ -400,12 +422,17 @@ final class FilteredDocument {
         guard let idx = layers.firstIndex(where: { $0.id == id }) else { return }
         checkpoint("Duplicate Layer")
         let src = layers[idx]
+        // Fresh FilterInstance identity — sharing the id would cross-wire undo
+        // coalescing between the original and the copy.
+        let filterCopy = src.filter.map {
+            FilterInstance(kind: $0.kind, isEnabled: $0.isEnabled, parameters: $0.parameters)
+        }
         let copy = Layer(name: src.name,
                         kind: src.kind,
                         isVisible: src.isVisible,
                         opacity: src.opacity,
                         blendMode: src.blendMode,
-                        filter: src.filter,
+                        filter: filterCopy,
                         text: src.text,
                         // Nudge duplicated text so it's visibly a copy.
                         position: src.kind == .text

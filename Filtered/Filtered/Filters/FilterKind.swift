@@ -35,17 +35,20 @@ struct FilterParamSpec: Sendable, Hashable, Identifiable {
 /// The family a filter belongs to — drives the grouped filter browser,
 /// grouped by effect family for the filter browser.
 enum FilterFamily: String, CaseIterable, Sendable, Identifiable {
-    case halftone, pixelate, distort, stylize, glitch, adjust, sharpen
+    // Case order = display order in the picker: everyday photo adjustments
+    // first, creative/stylistic effects after.
+    case adjust, film, sharpen, halftone, pixelate, distort, stylize, glitch
     var id: String { rawValue }
     var displayName: String {
         switch self {
+        case .adjust:   return "Adjust"
+        case .film:     return "Film / Photo"
+        case .sharpen:  return "Sharpen / Detail"
         case .halftone: return "Halftone"
         case .pixelate: return "Pixelate"
         case .distort:  return "Distort"
         case .stylize:  return "Stylize"
         case .glitch:   return "Glitch / Retro"
-        case .adjust:   return "Adjust"
-        case .sharpen:  return "Sharpen"
         }
     }
 }
@@ -92,9 +95,25 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
     case hue
     case vignette
     case blur
-    // Sharpen
+    case whiteBalance   // CITemperatureAndTint (composite: neutral vector)
+    case highlightShadow // CIHighlightShadowAdjust
+    case vibrance       // CIVibrance
+    case motionBlur     // CIMotionBlur
+    case zoomBlur       // CIZoomBlur
+    // Film / photo styles
+    case sepia          // CISepiaTone
+    case filmChrome     // CIPhotoEffectChrome
+    case filmFade       // CIPhotoEffectFade
+    case filmInstant    // CIPhotoEffectInstant
+    case filmNoir       // CIPhotoEffectNoir
+    case filmTonal      // CIPhotoEffectTonal
+    case filmTransfer   // CIPhotoEffectTransfer
+    // Distort (extra)
+    case kaleidoscope   // CIKaleidoscope
+    // Sharpen / detail
     case sharpenLuminance
     case unsharpMask
+    case noiseReduction // CINoiseReduction
 
     var id: String { rawValue }
 
@@ -131,8 +150,22 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
         case .hue:            return "Hue"
         case .vignette:       return "Vignette"
         case .blur:           return "Gaussian Blur"
+        case .whiteBalance:   return "White Balance"
+        case .highlightShadow: return "Highlights / Shadows"
+        case .vibrance:       return "Vibrance"
+        case .motionBlur:     return "Motion Blur"
+        case .zoomBlur:       return "Zoom Blur"
+        case .sepia:          return "Sepia"
+        case .filmChrome:     return "Film · Chrome"
+        case .filmFade:       return "Film · Fade"
+        case .filmInstant:    return "Film · Instant"
+        case .filmNoir:       return "Film · Noir"
+        case .filmTonal:      return "Film · Tonal"
+        case .filmTransfer:   return "Film · Transfer"
+        case .kaleidoscope:   return "Kaleidoscope"
         case .sharpenLuminance: return "Sharpen"
         case .unsharpMask:    return "Unsharp Mask"
+        case .noiseReduction: return "Noise Reduction"
         }
     }
 
@@ -140,12 +173,15 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
         switch self {
         case .halftoneCircle, .halftoneDots, .colorHalftone: return .halftone
         case .mosaic, .mosaicTiles: return .pixelate
-        case .glass, .bump, .twirl: return .distort
+        case .glass, .bump, .twirl, .kaleidoscope: return .distort
         case .grain, .gradientMap, .threshold, .posterize, .monochrome, .invert,
              .comic, .edges, .crystallize, .pointillize, .bloom, .ascii: return .stylize
         case .glitch, .chromaticAberration, .scanlines, .pixelSort: return .glitch
-        case .colorControls, .curves, .exposure, .gamma, .hue, .vignette, .blur: return .adjust
-        case .sharpenLuminance, .unsharpMask: return .sharpen
+        case .colorControls, .curves, .exposure, .gamma, .hue, .vignette, .blur,
+             .whiteBalance, .highlightShadow, .vibrance, .motionBlur, .zoomBlur: return .adjust
+        case .sepia, .filmChrome, .filmFade, .filmInstant, .filmNoir,
+             .filmTonal, .filmTransfer: return .film
+        case .sharpenLuminance, .unsharpMask, .noiseReduction: return .sharpen
         }
     }
 
@@ -307,6 +343,50 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
         case .blur:
             return [
                 .init(key: "inputRadius", label: "Radius", kind: .pixelScalar, min: 0, max: 50, def: 8),
+            ]
+        case .whiteBalance:
+            // Kelvin slider: >6500 warms the image, <6500 cools it.
+            return [
+                .init(key: "temp", label: "Temperature", kind: .scalar, min: 2500, max: 12000, def: 6500),
+                .init(key: "tint", label: "Tint", kind: .scalar, min: -100, max: 100, def: 0),
+            ]
+        case .highlightShadow:
+            // Identity defaults: shadow 0 (no lift), highlight 1 (no pull).
+            return [
+                .init(key: "inputShadowAmount", label: "Shadows", kind: .scalar, min: -1, max: 1, def: 0),
+                .init(key: "inputHighlightAmount", label: "Highlights", kind: .scalar, min: 0.3, max: 1, def: 1),
+                .init(key: "inputRadius", label: "Radius", kind: .pixelScalar, min: 0, max: 25, def: 1.5),
+            ]
+        case .vibrance:
+            return [
+                .init(key: "inputAmount", label: "Vibrance", kind: .scalar, min: -1, max: 1, def: 0),
+            ]
+        case .motionBlur:
+            return [
+                .init(key: "inputRadius", label: "Length", kind: .pixelScalar, min: 0, max: 100, def: 20),
+                .init(key: "inputAngle", label: "Direction", kind: .angle, min: -.pi, max: .pi, def: 0),
+            ]
+        case .zoomBlur:
+            return [
+                .init(key: "inputAmount", label: "Amount", kind: .pixelScalar, min: 0, max: 100, def: 20),
+                .init(key: "inputCenter", label: "Center", kind: .center, min: 0, max: 0, def: 0),
+            ]
+        case .sepia:
+            return [
+                .init(key: "inputIntensity", label: "Intensity", kind: .scalar, min: 0, max: 1, def: 0.8),
+            ]
+        case .filmChrome, .filmFade, .filmInstant, .filmNoir, .filmTonal, .filmTransfer:
+            return []
+        case .kaleidoscope:
+            return [
+                .init(key: "inputCount", label: "Segments", kind: .scalar, min: 2, max: 36, def: 6),
+                .init(key: "inputAngle", label: "Angle", kind: .angle, min: -.pi, max: .pi, def: 0),
+                .init(key: "inputCenter", label: "Center", kind: .center, min: 0, max: 0, def: 0),
+            ]
+        case .noiseReduction:
+            return [
+                .init(key: "inputNoiseLevel", label: "Noise Level", kind: .scalar, min: 0, max: 0.1, def: 0.02),
+                .init(key: "inputSharpness", label: "Sharpness", kind: .scalar, min: 0, max: 2, def: 0.4),
             ]
         case .sharpenLuminance:
             return [

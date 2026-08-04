@@ -118,15 +118,18 @@ enum ProjectIO {
 
     @MainActor
     static func open(into document: FilteredDocument) {
+        guard document.confirmDiscardChanges() else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.filteredProject]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        openFile(at: url, into: document)
+        openFile(at: url, into: document, skipDirtyCheck: true)
     }
 
     @MainActor
-    static func openFile(at url: URL, into document: FilteredDocument) {
+    static func openFile(at url: URL, into document: FilteredDocument,
+                         skipDirtyCheck: Bool = false) {
+        guard skipDirtyCheck || document.confirmDiscardChanges() else { return }
         guard let data = try? Data(contentsOf: url) else {
             presentError("Couldn't open “\(url.lastPathComponent)”", "The file could not be read.")
             return

@@ -43,6 +43,8 @@ enum CIFilterFactory {
             return applyPixelSort(params, to: input, extent: extent, renderScale: renderScale)
         case .curves:
             return applyCurves(params, to: input)
+        case .whiteBalance:
+            return applyWhiteBalance(params, to: input)
         default:
             return applyStock(kind: kind, params: params, to: input, extent: extent)
         }
@@ -59,7 +61,9 @@ enum CIFilterFactory {
         // Convolving filters sample neighbors; clamp so image edges don't
         // darken toward transparent (audited: 44% corner falloff on blur).
         let clampNeeded: Set<FilterKind> = [.bloom, .edges, .crystallize, .pointillize,
-                                            .blur, .unsharpMask, .sharpenLuminance]
+                                            .blur, .unsharpMask, .sharpenLuminance,
+                                            .motionBlur, .zoomBlur, .noiseReduction,
+                                            .highlightShadow]
         let fed = clampNeeded.contains(kind) ? input.clampedToExtent() : input
         filter.setValue(fed, forKey: kCIInputImageKey)
 
@@ -94,7 +98,7 @@ enum CIFilterFactory {
         // canvas stays stable.
         let out = filter.outputImage ?? input
         switch kind.family {
-        case .pixelate, .halftone, .distort, .stylize, .glitch, .adjust, .sharpen:
+        case .pixelate, .halftone, .distort, .stylize, .glitch, .adjust, .sharpen, .film:
             return out.cropped(to: extent)
         }
     }
@@ -125,10 +129,39 @@ enum CIFilterFactory {
         case .crystallize:      return "CICrystallize"
         case .pointillize:      return "CIPointillize"
         case .bloom:            return "CIBloom"
-        case .glass, .grain, .gradientMap, .invert, .curves,
+        case .highlightShadow:  return "CIHighlightShadowAdjust"
+        case .vibrance:         return "CIVibrance"
+        case .motionBlur:       return "CIMotionBlur"
+        case .zoomBlur:         return "CIZoomBlur"
+        case .sepia:            return "CISepiaTone"
+        case .filmChrome:       return "CIPhotoEffectChrome"
+        case .filmFade:         return "CIPhotoEffectFade"
+        case .filmInstant:      return "CIPhotoEffectInstant"
+        case .filmNoir:         return "CIPhotoEffectNoir"
+        case .filmTonal:        return "CIPhotoEffectTonal"
+        case .filmTransfer:     return "CIPhotoEffectTransfer"
+        case .kaleidoscope:     return "CIKaleidoscope"
+        case .noiseReduction:   return "CINoiseReduction"
+        case .glass, .grain, .gradientMap, .invert, .curves, .whiteBalance,
              .chromaticAberration, .scanlines, .glitch, .ascii, .pixelSort:
             return nil  // handled specially
         }
+    }
+
+    // MARK: - White balance (CITemperatureAndTint, composite neutral vector)
+
+    /// Temperature/tint sliders drive the source-neutral vector against a fixed
+    /// 6500K target: declaring the scene "bluer" (higher K) warms the image.
+    private static func applyWhiteBalance(_ params: FilterParameters,
+                                          to input: CIImage) -> CIImage {
+        let temp = params["temp"]?.doubleValue ?? 6500
+        let tint = params["tint"]?.doubleValue ?? 0
+        guard abs(temp - 6500) > 1 || abs(tint) > 0.5 else { return input }
+        let f = CIFilter.temperatureAndTint()
+        f.inputImage = input
+        f.neutral = CIVector(x: temp, y: tint)
+        f.targetNeutral = CIVector(x: 6500, y: 0)
+        return f.outputImage ?? input
     }
 
     // Note: halftoneCircle uses CICircularScreen which lacks inputAngle — its
