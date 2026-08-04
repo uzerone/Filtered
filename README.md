@@ -24,18 +24,24 @@ and Core Image. Made by [@uzerone](https://github.com/uzerone).
 
 ## Features
 
-- **33 filters as layers** — halftone, mosaic, glass, glitch, ASCII,
-  chromatic aberration, curves, and more. Each filter is its own adjustment
-  layer (affects everything below it), with per-layer opacity and blend
-  modes (Multiply, Screen, Overlay, …).
+- **47 filters as layers** — pro adjustments (White Balance,
+  Highlights/Shadows, Vibrance, Curves, Noise Reduction), film styles
+  (Sepia, Chrome, Fade, Instant, Noir, Tonal, Transfer), and creative
+  effects (halftone, mosaic, glass, glitch, ASCII, Kaleidoscope,
+  Motion/Zoom Blur, …). Each filter is its own adjustment layer (affects
+  everything below it), with per-layer opacity and blend modes
+  (Multiply, Screen, Overlay, …).
 - **Looks** — one-click editable filter stacks (Newsprint, Riso, VHS,
-  Cyberpunk, …) plus your own saved Looks.
+  Cyberpunk, Golden Hour, Polaroid, …) plus your own saved Looks.
 - **Image tools** — non-destructive crop with aspect presets, rotate/flip,
-  one-click subject cutout (Vision), Auto Enhance.
+  one-click subject cutout (Vision), live RGB histogram, and a smarter
+  Auto Enhance that fixes color casts and recovers shadows/highlights
+  with fully editable layers.
 - **Text layers** — every macOS font + imported fonts, drag with snapping
   guides.
-- **Workflow** — zoom/pan, hold-to-compare, drag-drop/paste import, full
-  undo/redo, canvas presets up to 8K, `.ftrd` self-contained project files.
+- **Workflow** — zoom/pan, hold-to-compare (or ⌘\ to toggle),
+  drag-drop/paste import, full undo/redo, canvas presets up to 8K,
+  `.ftrd` self-contained project files.
 - **Export** — PNG/JPEG/TIFF/HEIC, custom size or @1×/@2×/@3× batch,
   metadata + watermark, copy to clipboard.
 
