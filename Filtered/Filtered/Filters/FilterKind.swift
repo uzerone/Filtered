@@ -9,6 +9,7 @@ struct FilterParamSpec: Sendable, Hashable, Identifiable {
         case color         // RGBAColor
         case center        // CIVector center point (pixel space)
         case bool
+        case choice([String])  // named options; stored as a scalar index
     }
     let key: String
     let label: String
@@ -23,7 +24,7 @@ struct FilterParamSpec: Sendable, Hashable, Identifiable {
     /// Default FilterValue for this spec.
     var defaultValue: FilterValue {
         switch kind {
-        case .scalar, .pixelScalar: return .scalar(def)
+        case .scalar, .pixelScalar, .choice: return .scalar(def)
         case .angle: return .angle(def)
         case .color: return .color(.black)
         case .center: return .center(.zero)   // .zero => resolved to image center at render
@@ -100,6 +101,10 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
     case vibrance       // CIVibrance
     case motionBlur     // CIMotionBlur
     case zoomBlur       // CIZoomBlur
+    case levels         // composite: input range → gamma → output range
+    case dehaze         // composite: contrast/gamma/vibrance recipe
+    case splitTone      // composite: shadow/highlight tint via luma mask
+    case clarity        // composite: large-radius local contrast
     // Film / photo styles
     case sepia          // CISepiaTone
     case filmChrome     // CIPhotoEffectChrome
@@ -155,6 +160,10 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
         case .vibrance:       return "Vibrance"
         case .motionBlur:     return "Motion Blur"
         case .zoomBlur:       return "Zoom Blur"
+        case .levels:         return "Levels"
+        case .dehaze:         return "Dehaze"
+        case .splitTone:      return "Split Toning"
+        case .clarity:        return "Clarity"
         case .sepia:          return "Sepia"
         case .filmChrome:     return "Film · Chrome"
         case .filmFade:       return "Film · Fade"
@@ -178,10 +187,11 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
              .comic, .edges, .crystallize, .pointillize, .bloom, .ascii: return .stylize
         case .glitch, .chromaticAberration, .scanlines, .pixelSort: return .glitch
         case .colorControls, .curves, .exposure, .gamma, .hue, .vignette, .blur,
-             .whiteBalance, .highlightShadow, .vibrance, .motionBlur, .zoomBlur: return .adjust
+             .whiteBalance, .highlightShadow, .vibrance, .motionBlur, .zoomBlur,
+             .levels, .dehaze: return .adjust
         case .sepia, .filmChrome, .filmFade, .filmInstant, .filmNoir,
-             .filmTonal, .filmTransfer: return .film
-        case .sharpenLuminance, .unsharpMask, .noiseReduction: return .sharpen
+             .filmTonal, .filmTransfer, .splitTone: return .film
+        case .sharpenLuminance, .unsharpMask, .noiseReduction, .clarity: return .sharpen
         }
     }
 
@@ -284,7 +294,13 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
             ]
         case .ascii:
             return [
-                .init(key: "cellSize", label: "Cell Size", kind: .pixelScalar, min: 4, max: 40, def: 10),
+                .init(key: "style", label: "Style",
+                      kind: .choice(["Classic", "Blocks", "@ Only", "Binary", "Random"]),
+                      min: 0, max: 4, def: 0),
+                .init(key: "cellSize", label: "Cell Size", kind: .pixelScalar, min: 5, max: 48, def: 12),
+                .init(key: "colored", label: "Use Image Colors", kind: .bool, min: 0, max: 1, def: 0),
+                .init(key: "inverted", label: "Invert Brightness", kind: .bool, min: 0, max: 1, def: 0),
+                .init(key: "transparentBG", label: "Transparent Background", kind: .bool, min: 0, max: 1, def: 0),
             ]
         case .glitch:
             return [
@@ -370,6 +386,30 @@ enum FilterKind: String, CaseIterable, Sendable, Identifiable, Codable {
             return [
                 .init(key: "inputAmount", label: "Amount", kind: .pixelScalar, min: 0, max: 100, def: 20),
                 .init(key: "inputCenter", label: "Center", kind: .center, min: 0, max: 0, def: 0),
+            ]
+        case .levels:
+            // Identity defaults; the inspector renders these as a draggable
+            // histogram control, not plain sliders.
+            return [
+                .init(key: "inBlack", label: "Black Point", kind: .scalar, min: 0, max: 0.95, def: 0),
+                .init(key: "gamma", label: "Midtones", kind: .scalar, min: 0.2, max: 3, def: 1),
+                .init(key: "inWhite", label: "White Point", kind: .scalar, min: 0.05, max: 1, def: 1),
+                .init(key: "outBlack", label: "Output Black", kind: .scalar, min: 0, max: 1, def: 0),
+                .init(key: "outWhite", label: "Output White", kind: .scalar, min: 0, max: 1, def: 1),
+            ]
+        case .dehaze:
+            return [
+                .init(key: "amount", label: "Amount", kind: .scalar, min: 0, max: 1, def: 0.5),
+            ]
+        case .splitTone:
+            return [
+                .init(key: "shadowColor", label: "Shadows", kind: .color, min: 0, max: 0, def: 0),
+                .init(key: "highlightColor", label: "Highlights", kind: .color, min: 0, max: 0, def: 0),
+                .init(key: "amount", label: "Amount", kind: .scalar, min: 0, max: 1, def: 0.5),
+            ]
+        case .clarity:
+            return [
+                .init(key: "amount", label: "Amount", kind: .scalar, min: 0, max: 1.5, def: 0.5),
             ]
         case .sepia:
             return [

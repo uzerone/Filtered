@@ -69,8 +69,8 @@ struct CanvasView: View {
                         .allowsHitTesting(false)
                 }
 
-                // Text-layer drag handles.
-                ForEach(document.layers.filter { $0.kind == .text && $0.isVisible }) { layer in
+                // Text-layer drag handles (includes text inside visible groups).
+                ForEach(document.visibleTextLayers) { layer in
                     textHandle(layer, in: display)
                 }
 
@@ -106,6 +106,15 @@ struct CanvasView: View {
                             .padding(.leading, 12).padding(.bottom, 10)
                             Spacer()
                         }
+                    }
+                }
+
+                // Animation transport — only for animated sources (GIF/APNG).
+                if document.isAnimated {
+                    VStack {
+                        Spacer()
+                        AnimationTransportBar()
+                            .padding(.bottom, 12)
                     }
                 }
             }
@@ -189,9 +198,7 @@ struct CanvasView: View {
                     else if let u = item as? URL { url = u }
                     guard let url else { return }
                     Task { @MainActor in
-                        if let (image, size) = ImageImporter.load(url: url) {
-                            document.setSourceImage(image, pixelSize: size)
-                        }
+                        ImageImporter.importFile(url: url, into: document)
                     }
                 }
                 return true
@@ -200,9 +207,7 @@ struct CanvasView: View {
                 provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
                     guard let data else { return }
                     Task { @MainActor in
-                        if let (image, size) = ImageImporter.load(data: data) {
-                            document.setSourceImage(image, pixelSize: size)
-                        }
+                        ImageImporter.importData(data, into: document)
                     }
                 }
                 return true
@@ -247,7 +252,7 @@ struct CanvasView: View {
                 DragGesture()
                     .onChanged { value in
                         document.beginContinuousEdit("Move Text")
-                        document.selectedLayerID = layer.id
+                        document.setPrimarySelection(layer.id)
                         withAnimation(Motion.quick) { draggingLayerID = layer.id }
 
                         // 1:1 tracking — the handle stays glued to the pointer.
@@ -272,7 +277,7 @@ struct CanvasView: View {
                     }
             )
             .onTapGesture {
-                withAnimation(Motion.quick) { document.selectedLayerID = layer.id }
+                withAnimation(Motion.quick) { document.selectLayer(layer.id) }
             }
     }
 
@@ -300,6 +305,41 @@ struct CanvasView: View {
         let x = (size.width - w) / 2
         let y = (size.height - h) / 2
         return CGRect(x: x, y: y, width: w, height: h)
+    }
+}
+
+/// Play/pause + frame scrubber for animated sources. Every frame renders
+/// through the live filter stack, so you preview the final motion.
+private struct AnimationTransportBar: View {
+    @Environment(FilteredDocument.self) private var document
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                document.togglePlayback()
+            } label: {
+                Image(systemName: document.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(document.isPlaying ? "Pause" : "Play")
+
+            Slider(value: Binding(
+                get: { Double(document.currentFrameIndex) },
+                set: { v in
+                    document.stopPlayback()
+                    document.showFrame(Int(v.rounded()))
+                }), in: 0...Double(max(document.frameCount - 1, 1)))
+                .controlSize(.small)
+                .frame(width: 180)
+
+            Text("\(document.currentFrameIndex + 1)/\(document.frameCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Capsule().fill(.ultraThinMaterial))
     }
 }
 

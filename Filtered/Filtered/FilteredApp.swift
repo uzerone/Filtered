@@ -101,9 +101,7 @@ struct FilteredApp: App {
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(document.baseImage == nil && document.layers.isEmpty)
                 Button("Paste Image") {
-                    if let (image, size) = ImageImporter.loadFromPasteboard() {
-                        document.setSourceImage(image, pixelSize: size)
-                    } else {
+                    if !ImageImporter.importFromPasteboard(into: document) {
                         NSSound.beep()
                     }
                 }
@@ -117,10 +115,19 @@ struct FilteredApp: App {
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(document.selectedLayerID == nil)
                 Button("Delete Selected Layer") {
-                    if let id = document.selectedLayerID { document.removeLayer(id) }
+                    document.deleteSelectedLayers()
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled(document.selectedLayerID == nil)
+                .disabled(document.selectedLayerIDs.isEmpty)
+                Divider()
+                Button("Group Selected Layers") { document.groupSelectedLayers() }
+                    .keyboardShortcut("g", modifiers: .command)
+                    .disabled(!document.canGroupSelection)
+                Button("Ungroup") {
+                    if let id = document.selectedLayerID { document.ungroup(id) }
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(document.selectedLayer?.kind != .group)
             }
             // Image menu: rotate / flip / subject cutout.
             CommandMenu("Image") {

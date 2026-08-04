@@ -110,8 +110,6 @@ struct ContentView: View {
     }
 
     private func importImage() {
-        if let (image, size) = ImageImporter.openPanel() {
-            document.setSourceImage(image, pixelSize: size)
-        }
+        ImageImporter.importFromPanel(into: document)
     }
 }

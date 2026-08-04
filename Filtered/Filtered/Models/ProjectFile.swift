@@ -26,6 +26,9 @@ struct FilteredProjectFile: Codable {
     var sourceImagePNG: Data?
     var sourcePixelWidth: Int?
     var sourcePixelHeight: Int?
+    /// Original encoded bytes of an animated source (GIF/APNG). Optional so
+    /// old files keep decoding; when present it wins over the still PNG.
+    var sourceAnimatedData: Data?
 
     static let fileExtension = "ftrd"
 }
@@ -42,13 +45,16 @@ enum ProjectIO {
             author: AppSettings.shared.authorCredit,
             snapshot: document.snapshotForSave())
 
-        // Embed the source image as PNG.
+        // Embed the source image as PNG (first frame for animated sources —
+        // older app versions read it as a still).
         if let ci = document.sourceImage,
            let png = pngData(from: ci, pixelSize: document.sourcePixelSize) {
             file.sourceImagePNG = png
             file.sourcePixelWidth = Int(document.sourcePixelSize?.width ?? 0)
             file.sourcePixelHeight = Int(document.sourcePixelSize?.height ?? 0)
         }
+        // Animated sources also embed the original bytes so motion survives.
+        file.sourceAnimatedData = document.animationData
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -14,6 +14,10 @@ struct LayersPanel: View {
                 Menu {
                     Button("Add Text Layer") { document.addTextLayer() }
                     Button("Import Image…") { document.requestImport = true }
+                    Divider()
+                    Button("New Group") { document.addEmptyGroup() }
+                    Button("Group Selected Layers") { document.groupSelectedLayers() }
+                        .disabled(!document.canGroupSelection)
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -62,36 +66,42 @@ struct LayersPanel: View {
     }
 }
 
+/// Shared helpers for layer rows/cards.
+@MainActor
+private func layerIcon(_ layer: Layer) -> String {
+    switch layer.kind {
+    case .text: return "textformat"
+    case .image: return "photo"
+    case .filter: return "camera.filters"
+    case .group: return "folder"
+    }
+}
+@MainActor
+private func layerKindLabel(_ layer: Layer) -> String {
+    switch layer.kind {
+    case .text: return "Text Layer"
+    case .image: return "Image Layer"
+    case .filter: return "Filter Layer"
+    case .group: return "Group · \(layer.children.count) layers"
+    }
+}
+
 /// Each layer shown as its own expanded card — never collapsed into a single row.
 private struct LayerCard: View {
     @Environment(FilteredDocument.self) private var document
     @Bindable var layer: Layer
     let index: Int
 
-    private var isSelected: Bool { document.selectedLayerID == layer.id }
+    private var isSelected: Bool { document.selectedLayerIDs.contains(layer.id) }
     private var canMoveUp: Bool { index < document.layers.count - 1 }
     private var canMoveDown: Bool { index > 0 }
-
-    private var iconName: String {
-        switch layer.kind {
-        case .text: return "textformat"
-        case .image: return "photo"
-        case .filter: return "camera.filters"
-        }
-    }
-    private var kindLabel: String {
-        switch layer.kind {
-        case .text: return "Text Layer"
-        case .image: return "Image Layer"
-        case .filter: return "Filter Layer"
-        }
-    }
+    private var isExpanded: Bool { document.expandedGroups.contains(layer.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header: icon + editable name + visibility.
             HStack(spacing: 8) {
-                Image(systemName: iconName)
+                Image(systemName: layerIcon(layer))
                     .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                     .frame(width: 18)
 
@@ -106,18 +116,26 @@ private struct LayerCard: View {
 
                 Spacer()
 
-                Button {
-                    document.checkpoint("Toggle Visibility")
-                    layer.isVisible.toggle()
-                    document.scheduleRender()
-                } label: {
-                    Image(systemName: layer.isVisible ? "eye" : "eye.slash")
-                        .foregroundStyle(layer.isVisible ? .primary : .tertiary)
+                if layer.kind == .group {
+                    Button {
+                        withAnimation(Motion.quick) {
+                            if isExpanded { document.expandedGroups.remove(layer.id) }
+                            else { document.expandedGroups.insert(layer.id) }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .help(isExpanded ? "Collapse group" : "Expand group")
                 }
-                .buttonStyle(.borderless)
+
+                VisibilityButton(layer: layer)
             }
 
-            Text(kindLabel)
+            Text(layerKindLabel(layer))
                 .font(.caption2).foregroundStyle(.tertiary)
 
             // Opacity.
@@ -156,6 +174,22 @@ private struct LayerCard: View {
                 .labelsHidden()
             }
 
+            // Group children, indented, top-of-stack first.
+            if layer.kind == .group && isExpanded {
+                Divider()
+                if layer.children.isEmpty {
+                    Text("Empty group — right-click a layer to move it here")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(Array(layer.children.enumerated()).reversed(),
+                                id: \.element.id) { cidx, child in
+                            GroupChildRow(group: layer, child: child, childIndex: cidx)
+                        }
+                    }
+                }
+            }
+
             // Reorder + delete.
             HStack(spacing: 4) {
                 Button { move(up: true) } label: { Image(systemName: "chevron.up") }
@@ -163,6 +197,13 @@ private struct LayerCard: View {
                 Button { move(up: false) } label: { Image(systemName: "chevron.down") }
                     .buttonStyle(.borderless).disabled(!canMoveDown)
                 Spacer()
+                if layer.kind == .group {
+                    Button {
+                        document.ungroup(layer.id)
+                    } label: { Image(systemName: "folder.badge.minus") }
+                        .buttonStyle(.borderless)
+                        .help("Ungroup (⇧⌘G)")
+                }
                 Button {
                     document.duplicateLayer(layer.id)
                 } label: { Image(systemName: "plus.square.on.square") }
@@ -180,22 +221,47 @@ private struct LayerCard: View {
         .padding(10)
         .cardSurface(selected: isSelected)
         .contextMenu {
+            if document.selectedLayerIDs.count > 1 && document.canGroupSelection {
+                Button("Group Selected Layers") { document.groupSelectedLayers() }
+                Divider()
+            }
+            if layer.kind == .group {
+                Button("Ungroup") { document.ungroup(layer.id) }
+            } else if layer.kind != .image {
+                let groups = document.layers.filter { $0.kind == .group && $0.id != layer.id }
+                if !groups.isEmpty {
+                    Menu("Move into Group") {
+                        ForEach(groups) { g in
+                            Button(g.name) { document.moveLayer(layer.id, intoGroup: g.id) }
+                        }
+                    }
+                }
+            }
             Button("Duplicate") { document.duplicateLayer(layer.id) }
             Button("Delete", role: .destructive) { document.removeLayer(layer.id) }
         }
         .contentShape(Rectangle())
-        // Double-click a filter layer opens its detail params;
-        // single-click just selects (so you can keep adding filters).
-        .onTapGesture(count: 2) {
+        // Selection via SIMULTANEOUS gestures so the card's buttons (eye,
+        // chevrons, trash) always receive their clicks — plain onTapGesture on
+        // the card was swallowing them on macOS. ⌘-click extends the selection;
+        // double-click opens filter detail / toggles group expansion.
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
             if layer.kind == .filter {
                 withAnimation(Motion.quick) { document.openFilterDetail(layer.id) }
+            } else if layer.kind == .group {
+                withAnimation(Motion.quick) {
+                    if isExpanded { document.expandedGroups.remove(layer.id) }
+                    else { document.expandedGroups.insert(layer.id) }
+                }
+            }
+        })
+        .simultaneousGesture(TapGesture().onEnded {
+            if NSEvent.modifierFlags.contains(.command) {
+                document.toggleLayerSelection(layer.id)
             } else {
                 withAnimation(Motion.quick) { document.selectLayer(layer.id) }
             }
-        }
-        .onTapGesture(count: 1) {
-            withAnimation(Motion.quick) { document.selectLayer(layer.id) }
-        }
+        })
         .animation(Motion.quick, value: isSelected)
     }
 
@@ -207,6 +273,86 @@ private struct LayerCard: View {
         // Convert to the move API (offsets/destination semantics).
         let dest = up ? to + 1 : to
         document.moveLayers(from: IndexSet(integer: from), to: dest)
+    }
+}
+
+/// The visibility (eye) toggle, with a solid hit target so clicks land.
+private struct VisibilityButton: View {
+    @Environment(FilteredDocument.self) private var document
+    @Bindable var layer: Layer
+
+    var body: some View {
+        Button {
+            document.checkpoint("Toggle Visibility")
+            layer.isVisible.toggle()
+            document.scheduleRender()
+        } label: {
+            Image(systemName: layer.isVisible ? "eye" : "eye.slash")
+                .foregroundStyle(layer.isVisible ? .primary : .tertiary)
+                .frame(width: 22, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(layer.isVisible ? "Hide layer" : "Show layer")
+    }
+}
+
+/// A compact row for a layer inside a group.
+private struct GroupChildRow: View {
+    @Environment(FilteredDocument.self) private var document
+    @Bindable var group: Layer
+    @Bindable var child: Layer
+    let childIndex: Int
+
+    private var isSelected: Bool { document.selectedLayerIDs.contains(child.id) }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: layerIcon(child))
+                .font(.caption)
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .frame(width: 16)
+            Text(child.name)
+                .font(.caption)
+                .lineLimit(1)
+            Spacer()
+            Button {
+                document.moveChild(in: group, from: childIndex, to: childIndex + 1)
+            } label: { Image(systemName: "chevron.up").font(.caption2) }
+                .buttonStyle(.borderless)
+                .disabled(childIndex >= group.children.count - 1)
+            Button {
+                document.moveChild(in: group, from: childIndex, to: childIndex - 1)
+            } label: { Image(systemName: "chevron.down").font(.caption2) }
+                .buttonStyle(.borderless)
+                .disabled(childIndex <= 0)
+            VisibilityButton(layer: child)
+                .controlSize(.small)
+        }
+        .padding(.vertical, 5).padding(.horizontal, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.18))
+                                 : AnyShapeStyle(.quaternary.opacity(0.25)))
+        )
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            if child.kind == .filter {
+                withAnimation(Motion.quick) { document.openFilterDetail(child.id) }
+            }
+        })
+        .simultaneousGesture(TapGesture().onEnded {
+            if NSEvent.modifierFlags.contains(.command) {
+                document.toggleLayerSelection(child.id)
+            } else {
+                withAnimation(Motion.quick) { document.selectLayer(child.id) }
+            }
+        })
+        .contextMenu {
+            Button("Remove from Group") { document.moveLayerOutOfGroup(child.id) }
+            Button("Duplicate") { document.duplicateLayer(child.id) }
+            Button("Delete", role: .destructive) { document.removeLayer(child.id) }
+        }
     }
 }
 

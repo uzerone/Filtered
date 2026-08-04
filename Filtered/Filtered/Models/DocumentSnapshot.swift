@@ -43,10 +43,12 @@ struct DocumentSnapshot: Codable, Equatable {
         var text: TextContent?
         var position: Point2D
         var rotation: Double
+        /// Child layers for .group; optional so old files decode (nil = none).
+        var children: [LayerState]?
     }
 
     enum LayerKindCode: String, Codable {
-        case image, text, filter
+        case image, text, filter, group
     }
 }
 
@@ -56,6 +58,7 @@ extension LayerKind {
         case .image: return .image
         case .text: return .text
         case .filter: return .filter
+        case .group: return .group
         }
     }
     init(_ code: DocumentSnapshot.LayerKindCode) {
@@ -63,6 +66,7 @@ extension LayerKind {
         case .image: self = .image
         case .text: self = .text
         case .filter: self = .filter
+        case .group: self = .group
         }
     }
 }

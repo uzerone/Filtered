@@ -45,6 +45,14 @@ enum CIFilterFactory {
             return applyCurves(params, to: input)
         case .whiteBalance:
             return applyWhiteBalance(params, to: input)
+        case .levels:
+            return applyLevels(params, to: input)
+        case .dehaze:
+            return applyDehaze(params, to: input)
+        case .splitTone:
+            return applySplitTone(params, to: input, extent: extent)
+        case .clarity:
+            return applyClarity(params, to: input, extent: extent)
         default:
             return applyStock(kind: kind, params: params, to: input, extent: extent)
         }
@@ -70,6 +78,8 @@ enum CIFilterFactory {
         for spec in kind.params {
             guard let value = params[spec.key] else { continue }
             switch spec.kind {
+            case .choice:
+                break   // choice params only appear on specially-handled filters
             case .scalar, .pixelScalar, .angle:
                 if let d = value.doubleValue {
                     filter.setValue(d as NSNumber, forKey: spec.key)
@@ -143,9 +153,150 @@ enum CIFilterFactory {
         case .kaleidoscope:     return "CIKaleidoscope"
         case .noiseReduction:   return "CINoiseReduction"
         case .glass, .grain, .gradientMap, .invert, .curves, .whiteBalance,
-             .chromaticAberration, .scanlines, .glitch, .ascii, .pixelSort:
+             .chromaticAberration, .scanlines, .glitch, .ascii, .pixelSort,
+             .levels, .dehaze, .splitTone, .clarity:
             return nil  // handled specially
         }
+    }
+
+    // MARK: - Levels (input range → gamma → output range, Photoshop semantics)
+
+    private static func applyLevels(_ params: FilterParameters,
+                                    to input: CIImage) -> CIImage {
+        let inBlack = params["inBlack"]?.doubleValue ?? 0
+        let inWhite = max(params["inWhite"]?.doubleValue ?? 1, inBlack + 0.01)
+        let gamma = min(max(params["gamma"]?.doubleValue ?? 1, 0.1), 5)
+        let outBlack = params["outBlack"]?.doubleValue ?? 0
+        let outWhite = params["outWhite"]?.doubleValue ?? 1
+        // Identity → free.
+        if abs(inBlack) < 0.002, abs(inWhite - 1) < 0.002, abs(gamma - 1) < 0.005,
+           abs(outBlack) < 0.002, abs(outWhite - 1) < 0.002 { return input }
+
+        func matrix(_ image: CIImage, scale: Double, bias: Double) -> CIImage {
+            let m = CIFilter.colorMatrix()
+            m.inputImage = image
+            m.rVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+            m.gVector = CIVector(x: 0, y: scale, z: 0, w: 0)
+            m.bVector = CIVector(x: 0, y: 0, z: scale, w: 0)
+            m.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+            m.biasVector = CIVector(x: bias, y: bias, z: bias, w: 0)
+            return m.outputImage ?? image
+        }
+
+        // Levels must operate on gamma-encoded (sRGB) values — the histogram
+        // the user drags against bins encoded pixels, and Core Image's working
+        // space is linear. Encode, apply, decode; otherwise a 0.25 black point
+        // would crush everything below sRGB ~0.6 (verified: mid-gray → black).
+        let encode = CIFilter.linearToSRGBToneCurve()
+        encode.inputImage = input
+        var img = encode.outputImage ?? input
+
+        // 1. Remap [inBlack, inWhite] → [0, 1] and clip.
+        let inScale = 1 / (inWhite - inBlack)
+        img = matrix(img, scale: inScale, bias: -inBlack * inScale)
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = img
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        img = clamp.outputImage ?? img
+        // 2. Midtone gamma (slider > 1 brightens, like Photoshop).
+        if abs(gamma - 1) > 0.005 {
+            let g = CIFilter.gammaAdjust()
+            g.inputImage = img
+            g.power = Float(1 / gamma)
+            img = g.outputImage ?? img
+        }
+        // 3. Compress into [outBlack, outWhite].
+        if abs(outBlack) > 0.002 || abs(outWhite - 1) > 0.002 {
+            img = matrix(img, scale: outWhite - outBlack, bias: outBlack)
+        }
+
+        let decode = CIFilter.sRGBToneCurveToLinear()
+        decode.inputImage = img
+        return decode.outputImage ?? img
+    }
+
+    // MARK: - Dehaze (contrast + blacks + gamma + vibrance recipe)
+
+    private static func applyDehaze(_ params: FilterParameters,
+                                    to input: CIImage) -> CIImage {
+        let amount = min(max(params["amount"]?.doubleValue ?? 0.5, 0), 1)
+        guard amount > 0.01 else { return input }
+        // Haze reads as lifted blacks and flat contrast; pull both back.
+        let cc = CIFilter.colorControls()
+        cc.inputImage = input
+        cc.contrast = Float(1 + 0.32 * amount)
+        cc.saturation = Float(1 + 0.22 * amount)
+        cc.brightness = Float(-0.04 * amount)
+        var img = cc.outputImage ?? input
+        let g = CIFilter.gammaAdjust()
+        g.inputImage = img
+        g.power = Float(1 + 0.3 * amount)
+        img = g.outputImage ?? img
+        let ex = CIFilter.exposureAdjust()
+        ex.inputImage = img
+        ex.ev = Float(0.18 * amount)
+        return ex.outputImage ?? img
+    }
+
+    // MARK: - Split toning (tint shadows & highlights separately, Lightroom-style)
+
+    private static func applySplitTone(_ params: FilterParameters,
+                                       to input: CIImage,
+                                       extent: CGRect) -> CIImage {
+        var shadow = RGBAColor(r: 0.15, g: 0.35, b: 0.5)
+        var highlight = RGBAColor(r: 1.0, g: 0.85, b: 0.55)
+        if case .color(let c)? = params["shadowColor"] { shadow = c }
+        if case .color(let c)? = params["highlightColor"] { highlight = c }
+        let amount = min(max(params["amount"]?.doubleValue ?? 0.5, 0), 1)
+        guard amount > 0.01 else { return input }
+
+        func tinted(_ color: RGBAColor) -> CIImage {
+            let solid = CIImage(color: CIColor(cgColor: color.cgColor)).cropped(to: extent)
+            let f = CIFilter.softLightBlendMode()
+            f.inputImage = solid
+            f.backgroundImage = input
+            return (f.outputImage ?? input).cropped(to: extent)
+        }
+
+        // Luma decides which tint wins: dark pixels → shadow tint, bright →
+        // highlight tint (mask luminance drives blendWithMask).
+        let mono = CIFilter.photoEffectMono()
+        mono.inputImage = input
+        let luma = (mono.outputImage ?? input).cropped(to: extent)
+
+        let mix = CIFilter.blendWithMask()
+        mix.inputImage = tinted(highlight)
+        mix.backgroundImage = tinted(shadow)
+        mix.maskImage = luma
+        let toned = (mix.outputImage ?? input).cropped(to: extent)
+
+        // Wet/dry by amount.
+        guard amount < 1 else { return toned }
+        let fade = CIFilter.colorMatrix()
+        fade.inputImage = toned
+        fade.aVector = CIVector(x: 0, y: 0, z: 0, w: amount)
+        let wet = fade.outputImage ?? toned
+        let over = CIFilter.sourceOverCompositing()
+        over.inputImage = wet
+        over.backgroundImage = input
+        return (over.outputImage ?? input).cropped(to: extent)
+    }
+
+    // MARK: - Clarity (large-radius local contrast, Lightroom-style)
+
+    private static func applyClarity(_ params: FilterParameters,
+                                     to input: CIImage,
+                                     extent: CGRect) -> CIImage {
+        let amount = min(max(params["amount"]?.doubleValue ?? 0.5, 0), 1.5)
+        guard amount > 0.01 else { return input }
+        guard let f = CIFilter(name: "CIUnsharpMask") else { return input }
+        f.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+        // Radius scales with image size so the effect reads as midtone punch,
+        // not edge sharpening.
+        f.setValue(max(extent.width, extent.height) / 40 as NSNumber, forKey: "inputRadius")
+        f.setValue(amount * 0.7 as NSNumber, forKey: "inputIntensity")
+        return (f.outputImage ?? input).cropped(to: extent)
     }
 
     // MARK: - White balance (CITemperatureAndTint, composite neutral vector)
@@ -368,41 +519,138 @@ enum CIFilterFactory {
         return composed.cropped(to: extent)
     }
 
-    // MARK: - ASCII art (pixellate → luminance → posterize, stock approximation)
+    // MARK: - ASCII art (real character rendering via CoreText)
 
-    /// Approximates ASCII/character art without a Metal atlas: downsample to
-    /// cells, posterize luminance into distinct "density" bands, and overlay a
-    /// dot/line grid so cells read as character-like marks.
+    /// Shared context for reading the downsampled cell grid.
+    private static let sampleContext = CIContext(options: [.cacheIntermediates: false])
+
+    /// Density ramps, darkest → brightest. Index = the "style" choice param.
+    private static let asciiRamps: [[Character]] = [
+        Array(" .:-=+*#%@"),          // Classic
+        Array(" ░▒▓█"),               // Blocks
+        Array(" @"),                  // @ Only
+        Array(" 01"),                 // Binary
+        [],                           // Random (chars picked per cell)
+    ]
+    private static let randomChars = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+
+    /// True ASCII art: sample the image into a character grid, map each cell's
+    /// luminance onto a density ramp, and rasterize the characters with
+    /// CoreText. The glyph bitmap then acts as a mask over either flat white
+    /// or the pixellated image colors.
     private static func applyASCII(_ params: FilterParameters,
                                    to input: CIImage,
                                    extent: CGRect) -> CIImage {
-        let cell = max(params["cellSize"]?.doubleValue ?? 10, 4)
+        var cell = max(params["cellSize"]?.doubleValue ?? 12, 4)
+        let styleIdx = min(max(Int(params["style"]?.doubleValue ?? 0), 0), asciiRamps.count - 1)
+        var colored = false
+        if case .bool(let b)? = params["colored"] { colored = b }
+        var inverted = false
+        if case .bool(let b)? = params["inverted"] { inverted = b }
+        var transparentBG = false
+        if case .bool(let b)? = params["transparentBG"] { transparentBG = b }
 
-        // Desaturate.
-        let mono = CIFilter.photoEffectMono()
-        mono.inputImage = input
-        let gray = mono.outputImage ?? input
+        // Cap the grid so exports can't explode into millions of glyphs.
+        cell = max(cell, max(extent.width, extent.height) / 1024)
+        let wCells = max(Int(extent.width / cell), 1)
+        let hCells = max(Int(extent.height / cell), 1)
 
-        // Pixellate into cells.
-        let px = CIFilter.pixellate()
-        px.inputImage = gray
-        px.scale = Float(cell)
-        px.center = CGPoint(x: extent.midX, y: extent.midY)
-        let blocks = (px.outputImage ?? gray).cropped(to: extent)
+        // 1. Downsample to one pixel per cell and read luminance (+ color).
+        let sx = Double(wCells) / Double(extent.width)
+        let sy = Double(hCells) / Double(extent.height)
+        let small = input
+            .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        let gridRect = CGRect(x: 0, y: 0, width: wCells, height: hCells)
+        guard let cg = sampleContext.createCGImage(small, from: gridRect,
+                                                   format: .RGBA8,
+                                                   colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!),
+              let data = cg.dataProvider?.data,
+              let ptr = CFDataGetBytePtr(data) else { return input }
+        let bpr = cg.bytesPerRow
+        let bpp = cg.bitsPerPixel / 8
 
-        // Posterize luminance into ~6 density levels (like a char ramp).
-        let post = CIFilter.colorPosterize()
-        post.inputImage = blocks
-        post.levels = 6
-        let banded = (post.outputImage ?? blocks).cropped(to: extent)
+        // 2. Map cells to characters (CGImage row 0 = visual top).
+        let ramp = asciiRamps[styleIdx]
+        let isRandom = ramp.isEmpty
+        var rows: [String] = []
+        rows.reserveCapacity(hCells)
+        for y in 0..<hCells {
+            var row = String(); row.reserveCapacity(wCells)
+            for x in 0..<wCells {
+                let o = y * bpr + x * bpp
+                var luma = 0.2126 * Double(ptr[o]) / 255
+                       + 0.7152 * Double(ptr[o + 1]) / 255
+                       + 0.0722 * Double(ptr[o + 2]) / 255
+                if inverted { luma = 1 - luma }
+                if isRandom {
+                    // Stable per-cell character; density via draw/blank bands.
+                    var rand = SeededRandom(seed: UInt64(y &* 92821 &+ x &+ 1))
+                    let threshold = 0.18 + rand.next01() * 0.1
+                    row.append(luma > threshold
+                               ? randomChars[Int(rand.next() % UInt64(randomChars.count))]
+                               : " ")
+                } else {
+                    let idx = min(Int(luma * Double(ramp.count)), ramp.count - 1)
+                    row.append(ramp[idx])
+                }
+            }
+            rows.append(row)
+        }
 
-        // Overlay a character-cell grid (dot screen) so each cell has structure.
-        guard let dot = CIFilter(name: "CIDotScreen") else { return banded }
-        dot.setValue(banded, forKey: kCIInputImageKey)
-        dot.setValue(cell as NSNumber, forKey: "inputWidth")
-        dot.setValue(0.9 as NSNumber, forKey: "inputSharpness")
-        dot.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: "inputCenter")
-        return (dot.outputImage ?? banded).cropped(to: extent)
+        // 3. Rasterize the character grid with CoreText (white on black).
+        let pxW = Int(extent.width.rounded(.up))
+        let pxH = Int(extent.height.rounded(.up))
+        guard let ctx = CGContext(data: nil, width: pxW, height: pxH,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return input }
+        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: pxW, height: pxH))
+
+        let font = CTFontCreateWithName("Menlo-Regular" as CFString, cell, nil)
+        // Force each glyph's advance to exactly one cell for grid alignment.
+        let probe = CTLineCreateWithAttributedString(
+            NSAttributedString(string: "M", attributes: [.font: font]))
+        let advance = max(CTLineGetTypographicBounds(probe, nil, nil, nil), 0.1)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: CGColor(gray: 1, alpha: 1),
+            .kern: CGFloat(cell) - CGFloat(advance),
+        ]
+        for (r, rowString) in rows.enumerated() {
+            let line = CTLineCreateWithAttributedString(
+                NSAttributedString(string: rowString, attributes: attrs))
+            // CG is bottom-up: row 0 draws at the top.
+            let baselineY = CGFloat(pxH) - CGFloat(r + 1) * cell + cell * 0.22
+            ctx.textPosition = CGPoint(x: 0, y: baselineY)
+            CTLineDraw(line, ctx)
+        }
+        guard let maskCG = ctx.makeImage() else { return input }
+        let mask = CIImage(cgImage: maskCG)
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+
+        // 4. Composite: glyph mask picks image colors (pixellated) or white.
+        let colorSource: CIImage
+        if colored {
+            let px = CIFilter.pixellate()
+            px.inputImage = input.clampedToExtent()
+            px.scale = Float(cell)
+            px.center = CGPoint(x: extent.midX, y: extent.midY)
+            colorSource = (px.outputImage ?? input).cropped(to: extent)
+        } else {
+            colorSource = CIImage(color: CIColor(red: 1, green: 1, blue: 1)).cropped(to: extent)
+        }
+        let background = transparentBG
+            ? CIImage.empty().cropped(to: extent)
+            : CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: extent)
+
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = colorSource
+        blend.backgroundImage = background
+        blend.maskImage = mask
+        return (blend.outputImage ?? input).cropped(to: extent)
     }
 
     // MARK: - Curves (CIToneCurve, five fixed-x points)

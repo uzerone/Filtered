@@ -21,28 +21,40 @@ and Core Image. Made by [@uzerone](https://github.com/uzerone).
 > **Status: in development.** Filtered is an early work in progress — things
 > are incomplete and may change or break between commits. Not yet recommended
 > for production work.
+>
+> 📰 **See [DEVELOPMENT.md](DEVELOPMENT.md)** for version news — what's new,
+> fixed, and improved in each update, written in plain language.
 
 ## Features
 
-- **47 filters as layers** — pro adjustments (White Balance,
-  Highlights/Shadows, Vibrance, Curves, Noise Reduction), film styles
-  (Sepia, Chrome, Fade, Instant, Noir, Tonal, Transfer), and creative
-  effects (halftone, mosaic, glass, glitch, ASCII, Kaleidoscope,
-  Motion/Zoom Blur, …). Each filter is its own adjustment layer (affects
-  everything below it), with per-layer opacity and blend modes
-  (Multiply, Screen, Overlay, …).
-- **Looks** — one-click editable filter stacks (Newsprint, Riso, VHS,
-  Cyberpunk, Golden Hour, Polaroid, …) plus your own saved Looks.
+- **Presets & Studio modes** — one-tap Looks for speed, or the full manual
+  layer editor when you want control. Same engine, clearly separated.
+- **51 filters as layers** — pro adjustments (Levels with a draggable
+  histogram, White Balance, Highlights/Shadows, Vibrance, Clarity, Dehaze,
+  Curves, Noise Reduction), film styles (Sepia, Split Toning, Chrome, Fade,
+  Instant, Noir, Tonal, Transfer), and creative effects (halftone, mosaic,
+  glass, glitch, Kaleidoscope, Motion/Zoom Blur, …). Each filter is its own
+  adjustment layer with per-layer opacity and blend modes.
+- **Real ASCII art** — actual character rendering in five styles (Classic,
+  Blocks, @ Only, Binary, Random) with color, invert, and transparency
+  options.
+- **Layer groups** — ⌘-click to multi-select, ⌘G to group; hide, fade, or
+  blend a whole folder of layers as one unit.
+- **Animated GIFs** — import, play, and scrub motion right on the canvas
+  with every filter applied live; export writes an animated GIF with your
+  edits on every frame.
+- **20 Looks** — Newsprint, Riso, VHS, Cyberpunk, Teal & Orange, Cinematic,
+  Matte, Lomo, Golden Hour, … plus your own saved Looks.
 - **Image tools** — non-destructive crop with aspect presets, rotate/flip,
-  one-click subject cutout (Vision), live RGB histogram, and a smarter
-  Auto Enhance that fixes color casts and recovers shadows/highlights
-  with fully editable layers.
+  one-click subject cutout (Vision), live RGB/Luma histogram, and a smarter
+  Auto Enhance that fixes color casts and recovers shadows/highlights with
+  fully editable layers.
 - **Text layers** — every macOS font + imported fonts, drag with snapping
   guides.
 - **Workflow** — zoom/pan, hold-to-compare (or ⌘\ to toggle),
   drag-drop/paste import, full undo/redo, canvas presets up to 8K,
   `.ftrd` self-contained project files.
-- **Export** — PNG/JPEG/TIFF/HEIC, custom size or @1×/@2×/@3× batch,
+- **Export** — PNG/JPEG/TIFF/HEIC/GIF, custom size or @1×/@2×/@3× batch,
   metadata + watermark, copy to clipboard.
 
 Previews render at display resolution on a Metal-backed Core Image pipeline

@@ -11,7 +11,12 @@ import AppKit
 final class FilteredDocument {
     var canvas = CanvasSettings()
     var layers: [Layer] = []
+    /// Primary selection (drives the inspector).
     var selectedLayerID: UUID?
+    /// Full selection set (⌘-click extends). Always contains the primary.
+    var selectedLayerIDs: Set<UUID> = []
+    /// Groups currently expanded in the layers panel (UI state, not undoable).
+    var expandedGroups: Set<UUID> = []
 
     /// The .ftrd file this document is saved to (nil = never saved).
     var projectURL: URL?
@@ -27,6 +32,19 @@ final class FilteredDocument {
         didSet { if isComparingOriginal != oldValue { scheduleRender() } }
     }
 
+    /// The two ways of working, mirrored by the inspector's top switch:
+    /// **Presets** — one-tap Looks that swap wholesale (the fast path);
+    /// **Studio** — the full manual layer/filter editor.
+    enum EditorMode: String {
+        case presets, studio
+    }
+    var editorMode: EditorMode = .presets
+
+    /// Name of the preset currently applied via Presets mode (chip highlight).
+    var activeLookName: String?
+    /// The layers that preset created — swapped out when another is chosen.
+    @ObservationIgnored private var activeLookLayerIDs: [UUID] = []
+
     /// The filter layer whose DETAIL settings are open (entered via double-click).
     /// While nil (or not matching the selection), a selected filter layer just
     /// shows the "add filter" picker so the user can keep stacking filters.
@@ -41,13 +59,31 @@ final class FilteredDocument {
     /// Single-click: select a layer (no detail). Keeps the add-filter picker up
     /// for image/text/unopened-filter layers.
     func selectLayer(_ id: UUID) {
-        selectedLayerID = id
+        setPrimarySelection(id)
         editingFilterLayerID = nil
+    }
+
+    /// ⌘-click: toggle a layer in/out of the multi-selection.
+    func toggleLayerSelection(_ id: UUID) {
+        editingFilterLayerID = nil
+        if selectedLayerIDs.contains(id) {
+            selectedLayerIDs.remove(id)
+            if selectedLayerID == id { selectedLayerID = selectedLayerIDs.first }
+        } else {
+            selectedLayerIDs.insert(id)
+            selectedLayerID = id
+        }
+    }
+
+    /// Set a single-layer selection, keeping the set in sync.
+    func setPrimarySelection(_ id: UUID?) {
+        selectedLayerID = id
+        selectedLayerIDs = id.map { [$0] } ?? []
     }
 
     /// Double-click a filter layer: open its detail parameters.
     func openFilterDetail(_ id: UUID) {
-        selectedLayerID = id
+        setPrimarySelection(id)
         editingFilterLayerID = id
     }
 
@@ -56,8 +92,67 @@ final class FilteredDocument {
     }
 
     /// The imported source image at native resolution (kept for full-res export).
+    /// For animated sources this is the CURRENT frame — the whole pipeline
+    /// (filters, text, crop, export) is frame-agnostic and just uses it.
     var sourceImage: CIImage?
     var sourcePixelSize: Size2D?
+
+    // MARK: - Animated sources (GIF / APNG)
+
+    /// All decoded frames (nil / single frame = static image).
+    var animationFrames: [AnimationFrame]?
+    /// The original encoded file bytes (embedded in .ftrd so projects reopen
+    /// with full animation).
+    @ObservationIgnored var animationData: Data?
+    var currentFrameIndex = 0
+    var isPlaying = false
+    @ObservationIgnored private var playbackTask: Task<Void, Never>?
+
+    var isAnimated: Bool { (animationFrames?.count ?? 0) > 1 }
+    var frameCount: Int { animationFrames?.count ?? 0 }
+
+    /// Install an animated source. Reuses the static-image reset path, then
+    /// attaches the frames.
+    func setAnimatedSource(frames: [AnimationFrame], data: Data?, pixelSize: Size2D) {
+        guard let first = frames.first else { return }
+        setSourceImage(first.image, pixelSize: pixelSize)
+        animationFrames = frames
+        animationData = data
+        currentFrameIndex = 0
+    }
+
+    /// Jump to a frame. Navigation, not an edit: no checkpoint, no dirty flag.
+    func showFrame(_ index: Int) {
+        guard let frames = animationFrames, frames.indices.contains(index) else { return }
+        currentFrameIndex = index
+        sourceImage = frames[index].image
+        scheduleRender()
+    }
+
+    func togglePlayback() {
+        isPlaying ? stopPlayback() : startPlayback()
+    }
+
+    private func startPlayback() {
+        guard let frames = animationFrames, frames.count > 1 else { return }
+        isPlaying = true
+        playbackTask?.cancel()
+        playbackTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.isPlaying else { break }
+                let next = (self.currentFrameIndex + 1) % frames.count
+                self.showFrame(next)
+                let delay = max(frames[next].delay, 0.02)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+    }
+
+    func stopPlayback() {
+        isPlaying = false
+        playbackTask?.cancel()
+        playbackTask = nil
+    }
 
     /// Live preview output shown in the canvas view.
     var previewImage: NSImage?
@@ -80,9 +175,26 @@ final class FilteredDocument {
         return min(1, previewPixelWidth / Double(canvas.width))
     }
 
+    /// All layers with group children flattened in, depth-first in stack order.
+    var flattenedLayers: [Layer] {
+        layers.flatMap { $0.kind == .group ? [$0] + $0.children : [$0] }
+    }
+
+    /// Text layers that should show canvas drag handles: visible, and not
+    /// inside a hidden group.
+    var visibleTextLayers: [Layer] {
+        layers.flatMap { layer -> [Layer] in
+            if layer.kind == .group {
+                return layer.isVisible
+                    ? layer.children.filter { $0.kind == .text && $0.isVisible } : []
+            }
+            return (layer.kind == .text && layer.isVisible) ? [layer] : []
+        }
+    }
+
     var selectedLayer: Layer? {
         guard let id = selectedLayerID else { return nil }
-        return layers.first { $0.id == id }
+        return flattenedLayers.first { $0.id == id }
     }
 
     var baseImage: CIImage? { sourceImage }
@@ -128,11 +240,15 @@ final class FilteredDocument {
 
     func newCanvas() {
         guard confirmDiscardChanges() else { return }
+        stopPlayback()
         layers = []
         sourceImage = nil
         sourcePixelSize = nil
+        animationFrames = nil
+        animationData = nil
+        currentFrameIndex = 0
         previewImage = nil
-        selectedLayerID = nil
+        setPrimarySelection(nil)
         editingFilterLayerID = nil
         projectURL = nil
         subjectMask = nil
@@ -143,8 +259,13 @@ final class FilteredDocument {
     }
 
     func setSourceImage(_ image: CIImage, pixelSize: Size2D) {
+        stopPlayback()
         sourceImage = image
         sourcePixelSize = pixelSize
+        // A new source replaces any previous animation until (re)attached.
+        animationFrames = nil
+        animationData = nil
+        currentFrameIndex = 0
         // A new image invalidates the old mask and orientation.
         subjectMask = nil
         canvas.backgroundRemoved = false
@@ -155,7 +276,7 @@ final class FilteredDocument {
         if !layers.contains(where: { $0.kind == .image }) {
             let layer = Layer.imageLayer()
             layers.insert(layer, at: 0)
-            selectedLayerID = layer.id
+            setPrimarySelection(layer.id)
         }
         // Match canvas to image aspect on first import if canvas is default square.
         if canvas.width == 1080 && canvas.height == 1080 {
@@ -172,7 +293,7 @@ final class FilteredDocument {
         checkpoint("Add Text")
         let layer = Layer.textLayer()
         layers.append(layer)
-        selectedLayerID = layer.id
+        setPrimarySelection(layer.id)
         scheduleRender()
     }
 
@@ -182,34 +303,118 @@ final class FilteredDocument {
     func addFilter(_ kind: FilterKind) {
         checkpoint("Add \(kind.displayName)")
         let layer = Layer.filterLayer(kind)
-        layers.insert(layer, at: insertionIndex())
-        selectedLayerID = layer.id
+        insertNewLayer(layer)
+        setPrimarySelection(layer.id)
         scheduleRender()
     }
 
     /// Apply a Look: insert its whole filter stack as editable filter layers.
     func applyLook(_ look: LookPreset) {
-        checkpoint("Apply \(look.name)")
-        var idx = insertionIndex()
-        var lastID: UUID?
-        for instance in look.instances() {
-            let layer = Layer(name: instance.kind.displayName, kind: .filter, filter: instance)
-            layers.insert(layer, at: idx)
-            lastID = layer.id
-            idx += 1
+        applyFilterStack(name: look.name, instances: look.instances())
+    }
+
+    /// Insert a new layer just above the selection — into the same group when
+    /// the selection is a group child — or on top of the stack otherwise.
+    private func insertNewLayer(_ layer: Layer) {
+        if let sel = selectedLayerID {
+            if let idx = layers.firstIndex(where: { $0.id == sel }) {
+                layers.insert(layer, at: idx + 1)
+                return
+            }
+            for group in layers where group.kind == .group {
+                if let cidx = group.children.firstIndex(where: { $0.id == sel }) {
+                    group.children.insert(layer, at: cidx + 1)
+                    return
+                }
+            }
         }
-        if let lastID { selectedLayerID = lastID }
+        layers.append(layer)
+    }
+
+    // MARK: - Layer groups
+
+    /// True when the current selection can be grouped: at least one top-level
+    /// filter/text layer selected (the base image and existing groups stay put).
+    var canGroupSelection: Bool {
+        layers.contains { selectedLayerIDs.contains($0.id)
+            && $0.kind != .image && $0.kind != .group }
+    }
+
+    /// Fold the selected top-level layers into a new group at the position of
+    /// the bottom-most member, preserving their stacking order.
+    func groupSelectedLayers() {
+        let members = layers.filter { selectedLayerIDs.contains($0.id)
+            && $0.kind != .image && $0.kind != .group }
+        guard !members.isEmpty else { return }
+        checkpoint("Group Layers")
+        let bottomIdx = layers.firstIndex { $0.id == members[0].id } ?? 0
+        layers.removeAll { l in members.contains { $0.id == l.id } }
+        let group = Layer.groupLayer(children: members)
+        layers.insert(group, at: min(bottomIdx, layers.count))
+        expandedGroups.insert(group.id)
+        setPrimarySelection(group.id)
         editingFilterLayerID = nil
         scheduleRender()
     }
 
-    /// Where a new filter layer goes: just above the selection, else on top.
-    private func insertionIndex() -> Int {
-        if let sel = selectedLayerID,
-           let idx = layers.firstIndex(where: { $0.id == sel }) {
-            return idx + 1
+    /// Dissolve a group: splice its children back at the group's position.
+    func ungroup(_ id: UUID) {
+        guard let idx = layers.firstIndex(where: { $0.id == id }),
+              layers[idx].kind == .group else { return }
+        checkpoint("Ungroup")
+        let children = layers[idx].children
+        layers.remove(at: idx)
+        layers.insert(contentsOf: children, at: idx)
+        expandedGroups.remove(id)
+        setPrimarySelection(children.last?.id)
+        scheduleRender()
+    }
+
+    /// Add an empty group above the selection.
+    func addEmptyGroup() {
+        checkpoint("Add Group")
+        let group = Layer.groupLayer()
+        insertNewLayer(group)
+        expandedGroups.insert(group.id)
+        setPrimarySelection(group.id)
+        scheduleRender()
+    }
+
+    /// Move a top-level layer into a group (appended on top of its children).
+    func moveLayer(_ id: UUID, intoGroup groupID: UUID) {
+        guard let group = layers.first(where: { $0.id == groupID }), group.kind == .group,
+              let idx = layers.firstIndex(where: { $0.id == id }),
+              layers[idx].kind != .image, layers[idx].kind != .group else { return }
+        checkpoint("Move into Group")
+        let layer = layers.remove(at: idx)
+        group.children.append(layer)
+        expandedGroups.insert(groupID)
+        setPrimarySelection(layer.id)
+        scheduleRender()
+    }
+
+    /// Move a group child back to the top level, just above its group.
+    func moveLayerOutOfGroup(_ id: UUID) {
+        for (gidx, group) in layers.enumerated() where group.kind == .group {
+            if let cidx = group.children.firstIndex(where: { $0.id == id }) {
+                checkpoint("Remove from Group")
+                let layer = group.children.remove(at: cidx)
+                layers.insert(layer, at: gidx + 1)
+                setPrimarySelection(layer.id)
+                scheduleRender()
+                return
+            }
         }
-        return layers.count
+    }
+
+    /// Reorder within a group (chevron buttons in the layers panel).
+    func moveChild(in group: Layer, from: Int, to: Int) {
+        guard group.children.indices.contains(from),
+              group.children.indices.contains(to) else { return }
+        checkpoint("Move Layer")
+        let layer = group.children.remove(at: from)
+        group.children.insert(layer, at: to)
+        scheduleRender()
     }
 
     // MARK: - Image operations (rotate / flip / subject cutout)
@@ -393,63 +598,146 @@ final class FilteredDocument {
 
     // MARK: - Saved Looks support
 
-    /// The current filter layers, bottom-to-top — what "Save Look" captures.
+    /// The current filter layers, bottom-to-top (groups flattened in) — what
+    /// "Save Look" captures.
     var currentFilterStack: [FilterInstance] {
-        layers.compactMap { $0.kind == .filter ? $0.filter : nil }
+        flattenedLayers.compactMap { $0.kind == .filter ? $0.filter : nil }
     }
 
-    /// Insert an arbitrary filter stack as editable layers (saved Looks).
+    /// Insert an arbitrary filter stack as editable layers (Looks).
     func applyFilterStack(name: String, instances: [FilterInstance]) {
         checkpoint("Apply \(name)")
-        var idx = insertionIndex()
-        var lastID: UUID?
         for instance in instances {
             // Fresh identity so applying the same Look twice can't collide.
             let fresh = FilterInstance(kind: instance.kind,
                                        isEnabled: instance.isEnabled,
                                        parameters: instance.parameters)
             let layer = Layer(name: fresh.kind.displayName, kind: .filter, filter: fresh)
-            layers.insert(layer, at: idx)
-            lastID = layer.id
-            idx += 1
+            insertNewLayer(layer)
+            // Advance the selection so the next instance stacks above this one.
+            setPrimarySelection(layer.id)
         }
-        if let lastID { selectedLayerID = lastID }
         editingFilterLayerID = nil
         scheduleRender()
     }
 
-    func duplicateLayer(_ id: UUID) {
-        guard let idx = layers.firstIndex(where: { $0.id == id }) else { return }
-        checkpoint("Duplicate Layer")
-        let src = layers[idx]
-        // Fresh FilterInstance identity — sharing the id would cross-wire undo
-        // coalescing between the original and the copy.
-        let filterCopy = src.filter.map {
-            FilterInstance(kind: $0.kind, isEnabled: $0.isEnabled, parameters: $0.parameters)
+    /// Presets mode: applying a Look REPLACES the previous preset's layers
+    /// (one-tap filter semantics) instead of stacking like Studio mode does.
+    func applyLookExclusive(name: String, instances: [FilterInstance]) {
+        checkpoint("Apply \(name)")
+        removeActiveLookLayers()
+        var newIDs: [UUID] = []
+        for instance in instances {
+            let fresh = FilterInstance(kind: instance.kind,
+                                       isEnabled: instance.isEnabled,
+                                       parameters: instance.parameters)
+            let layer = Layer(name: fresh.kind.displayName, kind: .filter, filter: fresh)
+            layers.append(layer)
+            newIDs.append(layer.id)
         }
-        let copy = Layer(name: src.name,
-                        kind: src.kind,
-                        isVisible: src.isVisible,
-                        opacity: src.opacity,
-                        blendMode: src.blendMode,
-                        filter: filterCopy,
-                        text: src.text,
-                        // Nudge duplicated text so it's visibly a copy.
-                        position: src.kind == .text
-                            ? Point2D(x: min(src.position.x + 0.03, 1), y: min(src.position.y + 0.03, 1))
-                            : src.position,
-                        rotation: src.rotation)
-        layers.insert(copy, at: idx + 1)
-        selectedLayerID = copy.id
+        activeLookLayerIDs = newIDs
+        activeLookName = name
+        setPrimarySelection(newIDs.last)
+        editingFilterLayerID = nil
         scheduleRender()
+    }
+
+    /// Presets mode "None": remove the active preset's layers.
+    func clearActiveLook() {
+        guard activeLookName != nil || !activeLookLayerIDs.isEmpty else { return }
+        checkpoint("Remove Look")
+        removeActiveLookLayers()
+        cleanUpSelectionAfterRemoval()
+        scheduleRender()
+    }
+
+    private func removeActiveLookLayers() {
+        let stale = Set(activeLookLayerIDs)
+        if !stale.isEmpty {
+            layers.removeAll { stale.contains($0.id) }
+            for group in layers where group.kind == .group {
+                group.children.removeAll { stale.contains($0.id) }
+            }
+        }
+        activeLookLayerIDs = []
+        activeLookName = nil
+    }
+
+    /// Deep copy with fresh identities (layer ids and FilterInstance ids) —
+    /// shared ids would cross-wire selection and undo coalescing.
+    private func deepCopy(_ src: Layer) -> Layer {
+        Layer(name: src.name,
+              kind: src.kind,
+              isVisible: src.isVisible,
+              opacity: src.opacity,
+              blendMode: src.blendMode,
+              filter: src.filter.map {
+                  FilterInstance(kind: $0.kind, isEnabled: $0.isEnabled, parameters: $0.parameters)
+              },
+              text: src.text,
+              // Nudge duplicated text so it's visibly a copy.
+              position: src.kind == .text
+                  ? Point2D(x: min(src.position.x + 0.03, 1), y: min(src.position.y + 0.03, 1))
+                  : src.position,
+              rotation: src.rotation,
+              children: src.children.map { deepCopy($0) })
+    }
+
+    func duplicateLayer(_ id: UUID) {
+        checkpoint("Duplicate Layer")
+        if let idx = layers.firstIndex(where: { $0.id == id }) {
+            let copy = deepCopy(layers[idx])
+            layers.insert(copy, at: idx + 1)
+            setPrimarySelection(copy.id)
+            scheduleRender()
+            return
+        }
+        for group in layers where group.kind == .group {
+            if let cidx = group.children.firstIndex(where: { $0.id == id }) {
+                let copy = deepCopy(group.children[cidx])
+                group.children.insert(copy, at: cidx + 1)
+                setPrimarySelection(copy.id)
+                scheduleRender()
+                return
+            }
+        }
     }
 
     func removeLayer(_ id: UUID) {
         checkpoint("Delete Layer")
-        layers.removeAll { $0.id == id }
-        if selectedLayerID == id { selectedLayerID = layers.last?.id }
-        if editingFilterLayerID == id { editingFilterLayerID = nil }
+        removeLayerNoCheckpoint(id)
+        cleanUpSelectionAfterRemoval()
         scheduleRender()
+    }
+
+    /// Delete every layer in the multi-selection as one undo step.
+    func deleteSelectedLayers() {
+        guard !selectedLayerIDs.isEmpty else { return }
+        checkpoint("Delete Layers")
+        for id in selectedLayerIDs { removeLayerNoCheckpoint(id) }
+        cleanUpSelectionAfterRemoval()
+        scheduleRender()
+    }
+
+    private func removeLayerNoCheckpoint(_ id: UUID) {
+        if layers.contains(where: { $0.id == id }) {
+            layers.removeAll { $0.id == id }
+            return
+        }
+        for group in layers where group.kind == .group {
+            group.children.removeAll { $0.id == id }
+        }
+    }
+
+    private func cleanUpSelectionAfterRemoval() {
+        let existing = Set(flattenedLayers.map(\.id))
+        selectedLayerIDs.formIntersection(existing)
+        if let sel = selectedLayerID, !existing.contains(sel) {
+            setPrimarySelection(selectedLayerIDs.first ?? layers.last?.id)
+        }
+        if let ed = editingFilterLayerID, !existing.contains(ed) {
+            editingFilterLayerID = nil
+        }
     }
 
     func moveLayers(from source: IndexSet, to dest: Int) {
@@ -531,10 +819,12 @@ final class FilteredDocument {
 
     /// Drop references to layers that no longer exist after a restore.
     private func postRestoreCleanup() {
-        if let sel = selectedLayerID, !layers.contains(where: { $0.id == sel }) {
-            selectedLayerID = layers.last?.id
+        let existing = Set(flattenedLayers.map(\.id))
+        selectedLayerIDs.formIntersection(existing)
+        if let sel = selectedLayerID, !existing.contains(sel) {
+            setPrimarySelection(layers.last?.id)
         }
-        if let ed = editingFilterLayerID, !layers.contains(where: { $0.id == ed }) {
+        if let ed = editingFilterLayerID, !existing.contains(ed) {
             editingFilterLayerID = nil
         }
     }
@@ -556,15 +846,27 @@ final class FilteredDocument {
                           cropY: canvas.cropRect.map { Double($0.minY) },
                           cropW: canvas.cropRect.map { Double($0.width) },
                           cropH: canvas.cropRect.map { Double($0.height) }),
-            layers: layers.map { l in
-                DocumentSnapshot.LayerState(
-                    id: l.id, name: l.name, kind: l.kind.code,
-                    isVisible: l.isVisible, opacity: l.opacity,
-                    blendMode: l.blendMode == .normal ? nil : l.blendMode.rawValue,
-                    filter: l.filter, text: l.text,
-                    position: l.position, rotation: l.rotation)
-            },
+            layers: layers.map { layerState($0) },
             selectedLayerID: selectedLayerID)
+    }
+
+    private func layerState(_ l: Layer) -> DocumentSnapshot.LayerState {
+        DocumentSnapshot.LayerState(
+            id: l.id, name: l.name, kind: l.kind.code,
+            isVisible: l.isVisible, opacity: l.opacity,
+            blendMode: l.blendMode == .normal ? nil : l.blendMode.rawValue,
+            filter: l.filter, text: l.text,
+            position: l.position, rotation: l.rotation,
+            children: l.kind == .group ? l.children.map { layerState($0) } : nil)
+    }
+
+    private func layer(from s: DocumentSnapshot.LayerState) -> Layer {
+        Layer(id: s.id, name: s.name, kind: LayerKind(s.kind),
+              isVisible: s.isVisible, opacity: s.opacity,
+              blendMode: s.blendMode.flatMap(LayerBlendMode.init(rawValue:)) ?? .normal,
+              filter: s.filter, text: s.text,
+              position: s.position, rotation: s.rotation,
+              children: s.children?.map { layer(from: $0) } ?? [])
     }
 
     private func restore(_ snap: DocumentSnapshot) {
@@ -583,14 +885,8 @@ final class FilteredDocument {
             canvas.cropRect = nil
         }
         ensureMaskIfNeeded()
-        layers = snap.layers.map { s in
-            Layer(id: s.id, name: s.name, kind: LayerKind(s.kind),
-                  isVisible: s.isVisible, opacity: s.opacity,
-                  blendMode: s.blendMode.flatMap(LayerBlendMode.init(rawValue:)) ?? .normal,
-                  filter: s.filter, text: s.text,
-                  position: s.position, rotation: s.rotation)
-        }
-        selectedLayerID = snap.selectedLayerID
+        layers = snap.layers.map { layer(from: $0) }
+        setPrimarySelection(snap.selectedLayerID)
     }
 
     // MARK: - Project save / load (.ftrd)
@@ -600,10 +896,20 @@ final class FilteredDocument {
 
     /// Replace the whole document with a loaded project file.
     func load(from file: FilteredProjectFile, url: URL) {
+        stopPlayback()
         // A stale mask from the previous document must never apply here.
         subjectMask = nil
-        // Restore the source image first (if embedded).
-        if let png = file.sourceImagePNG, let ci = ProjectIO.ciImage(from: png) {
+        animationFrames = nil
+        animationData = nil
+        currentFrameIndex = 0
+        // Restore the animated source if embedded, else the still PNG.
+        if let animated = file.sourceAnimatedData,
+           let decoded = ImageImporter.loadAnimatedFrames(data: animated) {
+            sourceImage = decoded.frames.first?.image
+            sourcePixelSize = decoded.size
+            animationFrames = decoded.frames
+            animationData = animated
+        } else if let png = file.sourceImagePNG, let ci = ProjectIO.ciImage(from: png) {
             sourceImage = ci
             if let w = file.sourcePixelWidth, let h = file.sourcePixelHeight, w > 0, h > 0 {
                 sourcePixelSize = Size2D(width: Double(w), height: Double(h))
@@ -659,47 +965,72 @@ final class FilteredDocument {
     /// Build a Sendable snapshot of the current state. Synchronous, @MainActor.
     /// Text layers are rasterized here via a per-layer cache (only re-rendered
     /// when the text content or scale actually changed).
-    func makeRenderRequest(renderScale: Double) -> RenderRequest {
-        var renderLayers: [RenderLayer] = []
-        for layer in layers {
-            switch layer.kind {
-            case .image:
-                renderLayers.append(RenderLayer(
-                    kind: .image,
-                    isVisible: layer.isVisible,
-                    opacity: layer.opacity,
-                    blendMode: layer.blendMode,
-                    filter: nil,
-                    textImage: nil,
-                    position: layer.position,
-                    rotation: layer.rotation))
-            case .text:
-                let ci = layer.cachedTextImage(scale: renderScale)
-                renderLayers.append(RenderLayer(
-                    kind: .text,
-                    isVisible: layer.isVisible,
-                    opacity: layer.opacity,
-                    blendMode: layer.blendMode,
-                    filter: nil,
-                    textImage: ci.map(SendableCIImage.init),
-                    position: layer.position,
-                    rotation: layer.rotation))
-            case .filter:
-                renderLayers.append(RenderLayer(
-                    kind: .filter,
-                    // Before/after compare bypasses every filter layer.
-                    isVisible: layer.isVisible && !isComparingOriginal,
-                    opacity: layer.opacity,
-                    blendMode: layer.blendMode,
-                    filter: layer.filter,
-                    textImage: nil,
-                    position: layer.position,
-                    rotation: layer.rotation))
+    ///
+    /// `upTo` truncates the stack just below that layer id (used by the Levels
+    /// control to histogram its input). `baseOverride` swaps the base image
+    /// without touching the document (used by animated export).
+    func makeRenderRequest(renderScale: Double,
+                           upTo stopID: UUID? = nil,
+                           baseOverride: CIImage? = nil) -> RenderRequest {
+        var stopped = false
+
+        func build(_ source: [Layer]) -> [RenderLayer] {
+            var out: [RenderLayer] = []
+            for layer in source {
+                if stopped { break }
+                if layer.id == stopID { stopped = true; break }
+                switch layer.kind {
+                case .image:
+                    out.append(RenderLayer(
+                        kind: .image,
+                        isVisible: layer.isVisible,
+                        opacity: layer.opacity,
+                        blendMode: layer.blendMode,
+                        filter: nil,
+                        textImage: nil,
+                        position: layer.position,
+                        rotation: layer.rotation))
+                case .text:
+                    let ci = layer.cachedTextImage(scale: renderScale)
+                    out.append(RenderLayer(
+                        kind: .text,
+                        isVisible: layer.isVisible,
+                        opacity: layer.opacity,
+                        blendMode: layer.blendMode,
+                        filter: nil,
+                        textImage: ci.map(SendableCIImage.init),
+                        position: layer.position,
+                        rotation: layer.rotation))
+                case .filter:
+                    out.append(RenderLayer(
+                        kind: .filter,
+                        // Before/after compare bypasses every filter layer.
+                        isVisible: layer.isVisible && !isComparingOriginal,
+                        opacity: layer.opacity,
+                        blendMode: layer.blendMode,
+                        filter: layer.filter,
+                        textImage: nil,
+                        position: layer.position,
+                        rotation: layer.rotation))
+                case .group:
+                    out.append(RenderLayer(
+                        kind: .group,
+                        isVisible: layer.isVisible,
+                        opacity: layer.opacity,
+                        blendMode: layer.blendMode,
+                        filter: nil,
+                        textImage: nil,
+                        position: layer.position,
+                        rotation: layer.rotation,
+                        children: build(layer.children)))
+                }
             }
+            return out
         }
 
+        let renderLayers = build(layers)
         return RenderRequest(
-            base: sourceImage.map(SendableCIImage.init),
+            base: (baseOverride ?? sourceImage).map(SendableCIImage.init),
             canvasPixelSize: canvas.pixelSize,
             background: canvas.background,
             imageFit: canvas.imageFit,
@@ -710,4 +1041,11 @@ final class FilteredDocument {
             subjectMask: canvas.backgroundRemoved ? subjectMask : nil,
             cropRect: canvas.cropRect)
     }
+}
+
+/// One decoded frame of an animated source (GIF/APNG). Not actor-isolated so
+/// the decoder can build these outside the main actor.
+struct AnimationFrame {
+    let image: CIImage
+    let delay: Double      // seconds
 }

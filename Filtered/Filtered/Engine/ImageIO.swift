@@ -5,55 +5,105 @@ import CoreImage
 import ImageIO
 
 /// Image import via NSOpenPanel and decode to a CIImage at native resolution.
+/// Animated GIF/APNG files decode to full frame lists so the whole filter
+/// pipeline can play and export them in motion.
 enum ImageImporter {
     @MainActor
-    static func openPanel() -> (CIImage, Size2D)? {
+    static func importFromPanel(into document: FilteredDocument) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg, .tiff, .heic, .gif, .bmp, .image]
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .heic, .gif, .bmp, .webP, .image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return load(url: url)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importFile(url: url, into: document)
     }
 
-    static func load(url: URL) -> (CIImage, Size2D)? {
+    @MainActor
+    @discardableResult
+    static func importFile(url: URL, into document: FilteredDocument) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return importData(data, into: document)
+    }
+
+    /// Import raw image bytes (file, clipboard, drag & drop). Detects animated
+    /// sources and installs all frames.
+    @MainActor
+    @discardableResult
+    static func importData(_ data: Data, into document: FilteredDocument) -> Bool {
+        if let animated = loadAnimatedFrames(data: data) {
+            document.setAnimatedSource(frames: animated.frames, data: data,
+                                       pixelSize: animated.size)
+            return true
+        }
         // applyOrientationProperty bakes the EXIF orientation into the image so
         // phone photos load upright instead of sideways.
-        guard let ci = CIImage(contentsOf: url, options: [.applyOrientationProperty: true])
-        else { return nil }
-        let size = Size2D(width: ci.extent.width, height: ci.extent.height)
-        return (ci, size)
-    }
-
-    /// Import from raw image data (clipboard paste, drag & drop providers).
-    static func load(data: Data) -> (CIImage, Size2D)? {
         guard let ci = CIImage(data: data, options: [.applyOrientationProperty: true])
-        else { return nil }
-        let size = Size2D(width: ci.extent.width, height: ci.extent.height)
-        return (ci, size)
+        else { return false }
+        document.setSourceImage(ci, pixelSize: Size2D(width: ci.extent.width,
+                                                      height: ci.extent.height))
+        return true
     }
 
     /// Import from the general pasteboard: copied image files first, then
     /// raw image data (e.g. a screenshot or an image copied from a browser).
     @MainActor
-    static func loadFromPasteboard() -> (CIImage, Size2D)? {
+    @discardableResult
+    static func importFromPasteboard(into document: FilteredDocument) -> Bool {
         let pb = NSPasteboard.general
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [
             .urlReadingContentsConformToTypes: [UTType.image.identifier]
         ]) as? [URL], let url = urls.first {
-            return load(url: url)
+            return importFile(url: url, into: document)
         }
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             if let data = pb.data(forType: type) {
-                return load(data: data)
+                return importData(data, into: document)
             }
         }
-        return nil
+        return false
+    }
+
+    // MARK: Animated decode
+
+    /// Decode a multi-frame image (GIF/APNG/animated WebP). Returns nil for
+    /// static images so callers fall through to the still path.
+    static func loadAnimatedFrames(data: Data) -> (frames: [AnimationFrame], size: Size2D)? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let count = CGImageSourceGetCount(src)
+        guard count > 1 else { return nil }
+        var frames: [AnimationFrame] = []
+        frames.reserveCapacity(count)
+        for i in 0..<count {
+            guard let cg = CGImageSourceCreateImageAtIndex(src, i, nil) else { continue }
+            frames.append(AnimationFrame(image: CIImage(cgImage: cg),
+                                         delay: frameDelay(src, index: i)))
+        }
+        guard let first = frames.first, frames.count > 1 else { return nil }
+        return (frames, Size2D(width: first.image.extent.width,
+                               height: first.image.extent.height))
+    }
+
+    private static func frameDelay(_ src: CGImageSource, index: Int) -> Double {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(src, index, nil)
+                as? [CFString: Any] else { return 0.1 }
+        if let gif = props[kCGImagePropertyGIFDictionary] as? [CFString: Any] {
+            if let d = gif[kCGImagePropertyGIFUnclampedDelayTime] as? Double, d > 0.001 { return d }
+            if let d = gif[kCGImagePropertyGIFDelayTime] as? Double, d > 0.001 { return d }
+        }
+        if let png = props[kCGImagePropertyPNGDictionary] as? [CFString: Any] {
+            if let d = png[kCGImagePropertyAPNGUnclampedDelayTime] as? Double, d > 0.001 { return d }
+            if let d = png[kCGImagePropertyAPNGDelayTime] as? Double, d > 0.001 { return d }
+        }
+        if let webp = props[kCGImagePropertyWebPDictionary] as? [CFString: Any] {
+            if let d = webp[kCGImagePropertyWebPUnclampedDelayTime] as? Double, d > 0.001 { return d }
+            if let d = webp[kCGImagePropertyWebPDelayTime] as? Double, d > 0.001 { return d }
+        }
+        return 0.1
     }
 }
 
 enum ExportFormat: String, CaseIterable, Identifiable {
-    case png, jpeg, tiff, heic
+    case png, jpeg, tiff, heic, gif
     var id: String { rawValue }
     var utType: UTType {
         switch self {
@@ -61,6 +111,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .jpeg: return .jpeg
         case .tiff: return .tiff
         case .heic: return UTType("public.heic") ?? .heic
+        case .gif: return .gif
         }
     }
     var fileExtension: String {
@@ -69,6 +120,7 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .jpeg: return "jpg"
         case .tiff: return "tiff"
         case .heic: return "heic"
+        case .gif: return "gif"
         }
     }
     var displayName: String {
@@ -77,9 +129,10 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .jpeg: return "JPEG"
         case .tiff: return "TIFF"
         case .heic: return "HEIC"
+        case .gif: return "GIF"
         }
     }
-    var supportsTransparency: Bool { self == .png || self == .tiff }
+    var supportsTransparency: Bool { self == .png || self == .tiff || self == .gif }
     var isLossy: Bool { self == .jpeg || self == .heic }
 }
 
@@ -124,6 +177,14 @@ enum ImageExporter {
         panel.allowedContentTypes = [options.format.utType]
         panel.nameFieldStringValue = "Filtered.\(options.format.fileExtension)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // Animated export: every frame runs through the full filter pipeline.
+        if options.format == .gif, document.isAnimated {
+            if !(await exportAnimatedGIF(document: document, to: url, options: options)) {
+                presentError("Export failed", "The animation could not be written.")
+            }
+            return
+        }
 
         // Batch mode: one pick, three files (name, name@2x, name@3x).
         if options.batchScales {
@@ -176,6 +237,42 @@ enum ImageExporter {
                   author: settings.embedAuthorMetadata ? settings.authorCredit : nil) {
             presentError("Export failed", "The file could not be written to \(url.lastPathComponent).")
         }
+    }
+
+    /// Render every animation frame through the full pipeline and write an
+    /// animated GIF (infinite loop, original frame timings).
+    @MainActor
+    private static func exportAnimatedGIF(document: FilteredDocument, to url: URL,
+                                          options: ExportOptions) async -> Bool {
+        guard let frames = document.animationFrames, frames.count > 1 else { return false }
+        let scale = options.renderScale(canvasWidth: document.canvas.width,
+                                        canvasHeight: document.canvas.height)
+        guard let dest = CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.gif.identifier as CFString, frames.count, nil) else { return false }
+        CGImageDestinationSetProperties(dest, [
+            kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0],
+        ] as CFDictionary)
+
+        let settings = AppSettings.shared
+        var watermark: String? = nil
+        if settings.addWatermark {
+            let text = settings.watermarkText.isEmpty ? settings.authorCredit : settings.watermarkText
+            watermark = text.isEmpty ? "Filtered" : text
+        }
+
+        for frame in frames {
+            let request = document.makeRenderRequest(renderScale: scale,
+                                                     baseOverride: frame.image)
+            guard var cg = await RenderEngine.shared.render(request)?.cgImage else { return false }
+            if let watermark, let stamped = drawWatermark(watermark, on: cg) { cg = stamped }
+            CGImageDestinationAddImage(dest, cg, [
+                kCGImagePropertyGIFDictionary: [
+                    kCGImagePropertyGIFDelayTime: frame.delay,
+                    kCGImagePropertyGIFUnclampedDelayTime: frame.delay,
+                ],
+            ] as CFDictionary)
+        }
+        return CGImageDestinationFinalize(dest)
     }
 
     /// Stretch-resample to exact pixel dimensions (free-ratio custom export).

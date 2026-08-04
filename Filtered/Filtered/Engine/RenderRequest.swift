@@ -42,12 +42,15 @@ struct RenderLayer: Sendable {
     let textImage: SendableCIImage?
     let position: Point2D
     let rotation: Double
+    /// For .group layers: the sub-stack rendered as one unit.
+    var children: [RenderLayer]? = nil
 }
 
 enum LayerKindSnapshot: Sendable {
     case image
     case text
     case filter
+    case group
 }
 
 /// Unchecked-Sendable wrapper around a CIImage. CIImage is a value-semantics,

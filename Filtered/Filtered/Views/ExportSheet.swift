@@ -40,8 +40,14 @@ struct ExportSheet: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                Text(format.supportsTransparency ? "Supports transparency" : "No transparency (transparent areas filled black)")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                if format == .gif && document.isAnimated {
+                    Label("Animated — exports all \(document.frameCount) frames with your edits",
+                          systemImage: "play.rectangle")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text(format.supportsTransparency ? "Supports transparency" : "No transparency (transparent areas filled black)")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
 
             if format.isLossy {
@@ -96,6 +102,7 @@ struct ExportSheet: View {
 
                     Toggle("Export @1× @2× @3× together", isOn: $batchScales)
                         .font(.caption)
+                        .disabled(format == .gif)
                 }
 
                 let (w, h) = outSize
@@ -127,7 +134,7 @@ struct ExportSheet: View {
     private func export() {
         isExporting = true
         let options = ExportOptions(format: format, quality: quality, sizeMode: sizeMode,
-                                    batchScales: batchScales && !useCustomSize)
+                                    batchScales: batchScales && !useCustomSize && format != .gif)
         Task {
             await ImageExporter.exportPanel(document: document, options: options)
             await MainActor.run {

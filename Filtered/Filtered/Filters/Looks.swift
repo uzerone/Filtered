@@ -98,5 +98,52 @@ struct LookPreset: Identifiable, Sendable {
             (.grain, ["grainAmount": .scalar(0.12)]),
             (.whiteBalance, ["temp": .scalar(7200)]),
         ]),
+        LookPreset("tealorange", "Teal & Orange", icon: "circle.righthalf.filled", [
+            (.splitTone, ["shadowColor": .color(RGBAColor(r: 0.05, g: 0.35, b: 0.45)),
+                          "highlightColor": .color(RGBAColor(r: 1.0, g: 0.62, b: 0.28)),
+                          "amount": .scalar(0.7)]),
+            (.vibrance, ["inputAmount": .scalar(0.25)]),
+            (.clarity, ["amount": .scalar(0.35)]),
+        ]),
+        LookPreset("cinematic", "Cinematic", icon: "movieclapper", [
+            (.highlightShadow, ["inputShadowAmount": .scalar(0.25),
+                                "inputHighlightAmount": .scalar(0.85)]),
+            (.splitTone, ["shadowColor": .color(RGBAColor(r: 0.1, g: 0.2, b: 0.38)),
+                          "highlightColor": .color(RGBAColor(r: 0.95, g: 0.8, b: 0.55)),
+                          "amount": .scalar(0.5)]),
+            (.vignette, ["inputIntensity": .scalar(1.0), "inputRadius": .scalar(2.0)]),
+            (.grain, ["grainAmount": .scalar(0.07)]),
+        ]),
+        LookPreset("matte", "Matte", icon: "square.on.square.intersection.dashed", [
+            (.levels, ["outBlack": .scalar(0.08), "outWhite": .scalar(0.97)]),
+            (.colorControls, ["inputSaturation": .scalar(0.9)]),
+            (.grain, ["grainAmount": .scalar(0.08)]),
+        ]),
+        LookPreset("lomo", "Lomo", icon: "camera.aperture", [
+            (.colorControls, ["inputSaturation": .scalar(1.3), "inputContrast": .scalar(1.2)]),
+            (.curves, ["y0": .scalar(0.04), "y1": .scalar(0.2), "y3": .scalar(0.82), "y4": .scalar(0.98)]),
+            (.vignette, ["inputIntensity": .scalar(1.8), "inputRadius": .scalar(1.4)]),
+            (.grain, ["grainAmount": .scalar(0.12)]),
+        ]),
+        LookPreset("sunburst", "Sunburst", icon: "sun.max", [
+            (.whiteBalance, ["temp": .scalar(9000)]),
+            (.vibrance, ["inputAmount": .scalar(0.35)]),
+            (.bloom, ["inputRadius": .scalar(8), "inputIntensity": .scalar(0.7)]),
+        ]),
+        LookPreset("arctic", "Arctic", icon: "snowflake", [
+            (.whiteBalance, ["temp": .scalar(4800)]),
+            (.vibrance, ["inputAmount": .scalar(0.2)]),
+            (.clarity, ["amount": .scalar(0.4)]),
+        ]),
+        LookPreset("bleach", "Bleach Bypass", icon: "drop.triangle", [
+            (.colorControls, ["inputSaturation": .scalar(0.35), "inputContrast": .scalar(1.35)]),
+            (.sharpenLuminance, ["inputSharpness": .scalar(0.5)]),
+            (.grain, ["grainAmount": .scalar(0.14)]),
+        ]),
+        LookPreset("crisp", "Crisp Air", icon: "wind", [
+            (.dehaze, ["amount": .scalar(0.55)]),
+            (.clarity, ["amount": .scalar(0.45)]),
+            (.vibrance, ["inputAmount": .scalar(0.15)]),
+        ]),
     ]
 }

@@ -8,6 +8,7 @@ struct InspectorPanel: View {
         case .text: return "textformat"
         case .image: return "photo"
         case .filter: return "camera.filters"
+        case .group: return "folder"
         }
     }
     private func kindLabel(_ layer: Layer) -> String {
@@ -15,12 +16,45 @@ struct InspectorPanel: View {
         case .text: return "Text Layer"
         case .image: return "Image Layer"
         case .filter: return "Filter Layer"
+        case .group: return "Group"
         }
     }
 
     var body: some View {
+        @Bindable var doc = document
         VStack(spacing: 0) {
-            if let layer = document.selectedLayer {
+            // The two ways of working, made explicit: Presets (one-tap looks)
+            // vs Studio (full manual layer editing).
+            Picker("", selection: $doc.editorMode) {
+                Text("Presets").tag(FilteredDocument.EditorMode.presets)
+                Text("Studio").tag(FilteredDocument.EditorMode.studio)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, Spacing.l)
+            .padding(.vertical, Spacing.m)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
+            }
+
+            if document.editorMode == .presets {
+                PresetsBrowser()
+            } else {
+                studioContent
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // No opaque fill — let the panel's vibrancy material show through.
+        .animation(Motion.ui, value: document.selectedLayerID)
+        .animation(Motion.ui, value: document.editorMode)
+    }
+
+    @ViewBuilder
+    private var studioContent: some View {
+        VStack(spacing: 0) {
+            if document.selectedLayerIDs.count > 1 {
+                MultiSelectionInspector()
+            } else if let layer = document.selectedLayer {
                 // Header names the selected layer.
                 HStack(spacing: 8) {
                     Image(systemName: iconName(layer))
@@ -72,6 +106,10 @@ struct InspectorPanel: View {
                             ImageToolsView()
                             Divider()
                             FilterPickerGrid()
+                        case .group:
+                            GroupInspector(layer: layer)
+                            Divider()
+                            FilterPickerGrid()
                         }
                     }
                     .padding(Spacing.l)
@@ -83,9 +121,152 @@ struct InspectorPanel: View {
                                        description: Text("Import an image or add a text layer"))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // No opaque fill — let the panel's vibrancy material show through.
-        .animation(Motion.ui, value: document.selectedLayerID)
+    }
+}
+
+/// Presets mode: the one-tap gallery. Picking a Look REPLACES the previous
+/// pick (like the filter strip in classic photo apps); everything it adds is
+/// still real, editable layers — switch to Studio to fine-tune.
+private struct PresetsBrowser: View {
+    @Environment(FilteredDocument.self) private var document
+    @State private var settings = AppSettings.shared
+
+    private let columns = [GridItem(.adaptive(minimum: 92), spacing: 8)]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.m) {
+                Text("Pick a look — tap another to swap it. Fine-tune anytime in Studio.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Button {
+                    document.autoEnhance()
+                } label: {
+                    Label("Auto Enhance", systemImage: "wand.and.stars")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(document.baseImage == nil)
+
+                LazyVGrid(columns: columns, spacing: 8) {
+                    presetChip(name: "None", icon: "circle.slash",
+                               active: document.activeLookName == nil) {
+                        document.clearActiveLook()
+                    }
+                    ForEach(LookPreset.all) { look in
+                        presetChip(name: look.name, icon: look.icon,
+                                   active: document.activeLookName == look.name) {
+                            document.applyLookExclusive(name: look.name,
+                                                        instances: look.instances())
+                        }
+                    }
+                }
+
+                if !settings.savedLooks.isEmpty {
+                    Text("My Looks").font(.headline).padding(.top, 4)
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(settings.savedLooks) { look in
+                            presetChip(name: look.name, icon: "star",
+                                       active: document.activeLookName == look.name) {
+                                document.applyLookExclusive(name: look.name,
+                                                            instances: look.filters)
+                            }
+                            .contextMenu {
+                                Button("Delete Look", role: .destructive) {
+                                    settings.savedLooks.removeAll { $0.id == look.id }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(Spacing.l)
+        }
+    }
+
+    private func presetChip(name: String, icon: String, active: Bool,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(height: 20)
+                Text(name)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+        }
+        .buttonStyle(.bordered)
+        .tint(active ? Color.accentColor : nil)
+        .disabled(document.baseImage == nil && name != "None")
+    }
+}
+
+/// Studio inspector for a multi-selection: group / delete in bulk.
+private struct MultiSelectionInspector: View {
+    @Environment(FilteredDocument.self) private var document
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.m) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up")
+                    .foregroundStyle(Color.accentColor)
+                Text("\(document.selectedLayerIDs.count) Layers Selected")
+                    .font(.system(.headline, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, Spacing.l)
+            .padding(.vertical, Spacing.m)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    document.groupSelectedLayers()
+                } label: {
+                    Label("Group Layers", systemImage: "folder.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(!document.canGroupSelection)
+                .help("Fold the selected layers into a group (⌘G)")
+
+                Button(role: .destructive) {
+                    document.deleteSelectedLayers()
+                } label: {
+                    Label("Delete Layers", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+                }
+
+                Text("⌘-click layer cards to extend the selection.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, Spacing.l)
+            Spacer()
+        }
+    }
+}
+
+/// Studio inspector for a group layer.
+private struct GroupInspector: View {
+    @Environment(FilteredDocument.self) private var document
+    @Bindable var layer: Layer
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Group").font(.headline)
+            Text("A group applies its \(layer.children.count) layers together. Use the group's opacity to fade the combined effect, or its blend mode to remix it over the image.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button {
+                document.ungroup(layer.id)
+            } label: {
+                Label("Ungroup", systemImage: "folder.badge.minus")
+                    .frame(maxWidth: .infinity)
+            }
+            .help("Dissolve the group, keeping its layers (⇧⌘G)")
+        }
     }
 }
 
@@ -336,8 +517,13 @@ struct FilterLayerControls: View {
                 if filter.kind.params.isEmpty {
                     Text("This filter has no adjustable parameters").font(.caption).foregroundStyle(.secondary)
                 }
-                ForEach(filter.kind.params) { spec in
-                    ParamControl(spec: spec, filter: filterBinding)
+                if filter.kind == .levels {
+                    // Levels gets its dedicated draggable-histogram control.
+                    LevelsControl(layerID: layer.id, filter: filterBinding)
+                } else {
+                    ForEach(filter.kind.params) { spec in
+                        ParamControl(spec: spec, filter: filterBinding)
+                    }
                 }
 
                 Divider()
@@ -392,6 +578,30 @@ private struct ParamControl: View {
             EmptyView()   // center defaults to image center; drag-to-place could be added
         case .bool:
             boolToggle
+        case .choice(let options):
+            choicePicker(options)
+        }
+    }
+
+    private func choicePicker(_ options: [String]) -> some View {
+        HStack {
+            Text(spec.label).font(.caption)
+            Spacer()
+            Picker("", selection: Binding(
+                get: { min(max(Int(currentDouble), 0), options.count - 1) },
+                set: { idx in
+                    document.checkpoint(spec.label)
+                    filter.parameters.set(spec.key, .scalar(Double(idx)))
+                    document.scheduleRender()
+                })) {
+                ForEach(options.indices, id: \.self) { i in
+                    Text(options[i]).tag(i)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .labelsHidden()
+            .fixedSize()
         }
     }
 

@@ -36,14 +36,36 @@ actor RenderEngine {
         let canvasRect = CGRect(origin: .zero, size: outSize)
         guard outSize.width >= 1, outSize.height >= 1 else { return nil }
 
-        // Canvas background, then process the flat layer stack bottom-to-top.
+        // Canvas background, then process the layer stack bottom-to-top.
         // Content layers (image/text) composite ON TOP of the running result.
         // Filter layers transform the ENTIRE running composite beneath them
         // (Photoshop adjustment-layer semantics), honoring layer opacity as a
         // wet/dry blend between the unfiltered and filtered composite.
-        var composite = backgroundImage(request.background, rect: canvasRect)
+        let background = backgroundImage(request.background, rect: canvasRect)
+        let composite = compositeStack(request.layers, startingFrom: background,
+                                       request: request, canvasRect: canvasRect)
+            .cropped(to: canvasRect)
 
-        for layer in request.layers where layer.isVisible {
+        return context.createCGImage(composite,
+                                     from: canvasRect,
+                                     format: .RGBA8,
+                                     colorSpace: outColorSpace)
+            .map(SendableCGImage.init)
+    }
+
+    /// Render a layer stack bottom-to-top over `start`. Called recursively for
+    /// groups: a group's children render as a sub-stack starting from the
+    /// composite below the group (so filters inside behave exactly as if
+    /// inline), then the combined result blends back with the GROUP's
+    /// opacity/blend mode — one wet/dry control for the whole folder.
+    private func compositeStack(_ layers: [RenderLayer],
+                                startingFrom start: CIImage,
+                                request: RenderRequest,
+                                canvasRect: CGRect) -> CIImage {
+        let scale = request.renderScale
+        var composite = start
+
+        for layer in layers where layer.isVisible {
             switch layer.kind {
             case .filter:
                 guard let f = layer.filter, f.isEnabled else { continue }
@@ -86,16 +108,22 @@ actor RenderEngine {
                 let img = positionText(textImg, layer: layer, canvasRect: canvasRect)
                 composite = blend(applyOpacity(img, opacity: layer.opacity),
                                   over: composite, mode: layer.blendMode, rect: canvasRect)
+
+            case .group:
+                guard let children = layer.children, !children.isEmpty else { continue }
+                let grouped = compositeStack(children, startingFrom: composite,
+                                             request: request, canvasRect: canvasRect)
+                    .cropped(to: canvasRect)
+                if layer.opacity >= 1 && layer.blendMode == .normal {
+                    composite = grouped
+                } else {
+                    let wet = applyOpacity(grouped, opacity: layer.opacity)
+                    composite = blend(wet, over: composite,
+                                      mode: layer.blendMode, rect: canvasRect)
+                }
             }
         }
-
-        composite = composite.cropped(to: canvasRect)
-
-        return context.createCGImage(composite,
-                                     from: canvasRect,
-                                     format: .RGBA8,
-                                     colorSpace: outColorSpace)
-            .map(SendableCGImage.init)
+        return composite
     }
 
     // MARK: - Placement & compositing helpers

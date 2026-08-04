@@ -7,6 +7,7 @@ enum LayerKind: Sendable, Equatable {
     case image      // the imported base photo
     case text       // a text overlay
     case filter     // an adjustment/filter layer — affects everything below it
+    case group      // a folder of layers applied together as one unit
 }
 
 /// How a layer composites over what's beneath it. For filter layers this is
@@ -73,6 +74,10 @@ final class Layer: Identifiable {
     /// Rotation in radians (text layers).
     var rotation: Double
 
+    /// Child layers (only for .group layers), bottom-to-top like the main
+    /// stack. One level deep: groups never contain other groups.
+    var children: [Layer]
+
     init(id: UUID = UUID(),
          name: String,
          kind: LayerKind,
@@ -82,7 +87,8 @@ final class Layer: Identifiable {
          filter: FilterInstance? = nil,
          text: TextContent? = nil,
          position: Point2D = Point2D(x: 0.5, y: 0.5),
-         rotation: Double = 0) {
+         rotation: Double = 0,
+         children: [Layer] = []) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -93,6 +99,7 @@ final class Layer: Identifiable {
         self.text = text
         self.position = position
         self.rotation = rotation
+        self.children = children
     }
 
     // MARK: Text rasterization cache
@@ -135,5 +142,9 @@ final class Layer: Identifiable {
         Layer(name: kind.displayName,
               kind: .filter,
               filter: FilterInstance(kind: kind))
+    }
+
+    static func groupLayer(name: String = "Group", children: [Layer] = []) -> Layer {
+        Layer(name: name, kind: .group, children: children)
     }
 }
