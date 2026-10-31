@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'"
+    />
+    <title>Filtered 2.0</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">Filtered <span class="version-badge">2.0</span></div>
+      <div class="document-name" id="document-name">Untitled</div>
+      <div class="toolbar">
+        <button data-action="new" title="New canvas">New</button
+        ><button data-action="open">Open…</button
+        ><button data-action="save">Save</button
+        ><button data-action="export" class="primary">Export ↗</button>
+      </div>
+    </header>
+    <main>
+      <aside class="library">
+        <div class="section-title">TOOLS</div>
+        <div class="tool-grid">
+          <button data-action="open">＋ Image</button
+          ><button data-action="text">T Text</button
+          ><button data-action="enhance">✧ Enhance</button
+          ><button data-action="cutout">✂ Cutout</button
+          ><button data-action="watermark" class="watermark-tool">
+            © Watermark
+          </button>
+        </div>
+        <div class="tabs">
+          <button data-mode="presets" class="active">Presets</button
+          ><button data-mode="studio">Studio</button>
+        </div>
+        <input
+          id="search"
+          type="search"
+          placeholder="Search Looks…"
+          aria-label="Search filters and Looks"
+        />
+        <div id="library-list"></div>
+        <div class="library-footer">
+          <button data-action="save-look">Save current Look</button>
+        </div>
+      </aside>
+      <section class="workspace">
+        <div class="canvas-toolbar">
+          <div>
+            <button data-action="undo" title="Undo">↶</button
+            ><button data-action="redo" title="Redo">↷</button
+            ><span class="divider"></span
+            ><button data-action="rotate">Rotate</button
+            ><button data-action="flip">Flip</button
+            ><button data-action="crop">Crop</button>
+          </div>
+          <div>
+            <button id="compare" data-action="compare">Compare</button
+            ><button data-action="fit">Fit</button
+            ><select id="zoom" aria-label="Zoom">
+              <option value="fit">Fit</option>
+              <option value="0.25">25%</option>
+              <option value="0.5">50%</option>
+              <option value="1">100%</option>
+              <option value="2">200%</option>
+            </select>
+          </div>
+        </div>
+        <div id="viewport">
+          <div id="canvas-wrap">
+            <canvas id="preview" aria-label="Image preview"></canvas>
+            <div id="empty">
+              <div class="empty-icon">▧</div>
+              <h1>Start with an image</h1>
+              <button data-action="open" class="primary">Open an image</button>
+            </div>
+          </div>
+        </div>
+        <div id="timeline" hidden>
+          <button id="play" data-action="play">▶</button
+          ><input
+            id="frame"
+            type="range"
+            min="0"
+            max="0"
+            value="0"
+            aria-label="Animation frame"
+          /><span id="frame-label"></span>
+        </div>
+        <footer>
+          <span id="dimensions">1080 × 1080</span
+          ><span id="status" role="status"></span><span id="render-time"></span>
+        </footer>
+      </section>
+      <aside class="inspector">
+        <div class="section-title">
+          CANVAS
+          <button
+            data-action="settings"
+            class="icon-button"
+            title="Export preferences"
+          >
+            ⚙
+          </button>
+        </div>
+        <div id="canvas-controls"></div>
+        <div class="histogram-header">
+          <span>HISTOGRAM</span
+          ><select id="histogram-mode" aria-label="Histogram mode">
+            <option>RGB</option>
+            <option>Luma</option>
+          </select>
+        </div>
+        <canvas
+          id="histogram"
+          width="256"
+          height="64"
+          aria-label="Image histogram"
+        ></canvas>
+        <div class="section-title">
+          LAYERS
+          <span
+            ><button data-action="group" title="Group selected layers">⊞</button
+            ><button data-action="duplicate" title="Duplicate layer">⧉</button
+            ><button data-action="delete" title="Delete selected layers">
+              −
+            </button></span
+          >
+        </div>
+        <div id="layers"></div>
+        <div class="section-title">PROPERTIES</div>
+        <div id="properties"></div>
+      </aside>
+    </main>
+    <dialog id="modal">
+      <form method="dialog" id="modal-form">
+        <div class="dialog-title">
+          <h2 id="modal-title"></h2>
+          <button value="cancel" aria-label="Close dialog">×</button>
+        </div>
+        <div id="modal-content"></div>
+        <div class="dialog-actions">
+          <button value="cancel">Cancel</button
+          ><button id="modal-submit" value="ok" class="primary">Apply</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

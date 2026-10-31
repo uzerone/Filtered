@@ -5,6 +5,22 @@ and improved in each update. No tech jargon, just what you'll notice.
 
 ---
 
+## Filtered 2.0 — October 30, 2026
+
+Filtered now starts and packages as an Electron desktop app. The Swift app is archived under `legacy/swift/` and is no longer part of the active build.
+
+- Rebuilt the three-pane editor, 51-filter catalog, 20 Looks, text tools, layer groups, undo/redo, and project workflow in JavaScript.
+- Kept version 1 `.ftrd` loading and embedded source images/animations. New projects can also embed imported fonts and subject-cutout pixels.
+- Added native Electron menus and file dialogs, a sandboxed renderer with a narrow preload bridge, GIF playback/export, still-image exports, and cross-platform package configuration.
+- Retained macOS Vision cutout through an Objective-C helper and HEIC support through macOS codecs.
+- Added editable watermark layers with five presets, nine-point placement, text styling, rotation, and tiling; saved with the project and rendered in all exports.
+- Removed secondary instructional copy, repeated labels, and decorative hints from the workspace and dialogs.
+- Added automated model tests and real Electron smoke coverage for editing, file I/O, all filter kernels, and GIF timing.
+
+Core Image effects now use Canvas/JavaScript approximations. See the README migration notes for rendering differences, platform support, and animation limits. Earlier entries below describe the archived native app.
+
+---
+
 ## Update 3 — Groups, Motion & a Smarter Darkroom *(August 4, 2026)*
 
 The biggest update yet. Filtered now edits **moving pictures**, lets you

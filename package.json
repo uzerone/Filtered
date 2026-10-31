@@ -1,0 +1,75 @@
+{
+  "name": "filtered",
+  "version": "2.0.0",
+  "description": "A layer-based image and GIF studio",
+  "author": "uzerone",
+  "license": "MIT",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "dev": "npm run start",
+    "test": "node --test tests/*.test.mjs",
+    "test:smoke": "npm run build && node tests/smoke.mjs",
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "gifenc": "^1.0.3",
+    "gifuct-js": "^2.1.2",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.12",
+    "playwright": "^1.56.1",
+    "prettier": "^3.9.10"
+  },
+  "build": {
+    "appId": "com.filtered.electron",
+    "productName": "Filtered",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "electron/native/cutout"
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "icon": "assets/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "fileAssociations": [
+      {
+        "ext": "ftrd",
+        "name": "Filtered Project",
+        "role": "Editor"
+      }
+    ]
+  }
+}

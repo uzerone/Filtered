@@ -1,77 +1,40 @@
-<p align="center">
-  <img src="Filtered/Filtered/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="Filtered icon">
-</p>
+# Filtered 2.0
 
-# Filtered
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Swift-6.3-F05138?logo=swift&logoColor=white" alt="Swift 6.3">
-  <img src="https://img.shields.io/badge/SwiftUI-0B84FF?logo=swift&logoColor=white" alt="SwiftUI">
-  <img src="https://img.shields.io/badge/Core%20Image-1C7EF3" alt="Core Image">
-  <img src="https://img.shields.io/badge/Metal-8A2BE2?logo=apple&logoColor=white" alt="Metal">
-  <img src="https://img.shields.io/badge/Vision-5E5CE6?logo=apple&logoColor=white" alt="Vision">
-  <img src="https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white" alt="macOS 15+">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/status-in%20development-orange" alt="In development">
-</p>
-
-Fast filtering for images & designs — a native macOS app built with SwiftUI
-and Core Image. Made by [@uzerone](https://github.com/uzerone).
-
-> **Status: in development.** Filtered is an early work in progress — things
-> are incomplete and may change or break between commits. Not yet recommended
-> for production work.
->
-> 📰 **See [DEVELOPMENT.md](DEVELOPMENT.md)** for version news — what's new,
-> fixed, and improved in each update, written in plain language.
+A desktop image and GIF editor built with Electron. Add filters, text, and watermarks, then save or export your work.
 
 ## Features
 
-- **Presets & Studio modes** — one-tap Looks for speed, or the full manual
-  layer editor when you want control. Same engine, clearly separated.
-- **51 filters as layers** — pro adjustments (Levels with a draggable
-  histogram, White Balance, Highlights/Shadows, Vibrance, Clarity, Dehaze,
-  Curves, Noise Reduction), film styles (Sepia, Split Toning, Chrome, Fade,
-  Instant, Noir, Tonal, Transfer), and creative effects (halftone, mosaic,
-  glass, glitch, Kaleidoscope, Motion/Zoom Blur, …). Each filter is its own
-  adjustment layer with per-layer opacity and blend modes.
-- **Real ASCII art** — actual character rendering in five styles (Classic,
-  Blocks, @ Only, Binary, Random) with color, invert, and transparency
-  options.
-- **Layer groups** — ⌘-click to multi-select, ⌘G to group; hide, fade, or
-  blend a whole folder of layers as one unit.
-- **Animated GIFs** — import, play, and scrub motion right on the canvas
-  with every filter applied live; export writes an animated GIF with your
-  edits on every frame.
-- **20 Looks** — Newsprint, Riso, VHS, Cyberpunk, Teal & Orange, Cinematic,
-  Matte, Lomo, Golden Hour, … plus your own saved Looks.
-- **Image tools** — non-destructive crop with aspect presets, rotate/flip,
-  one-click subject cutout (Vision), live RGB/Luma histogram, and a smarter
-  Auto Enhance that fixes color casts and recovers shadows/highlights with
-  fully editable layers.
-- **Text layers** — every macOS font + imported fonts, drag with snapping
-  guides.
-- **Workflow** — zoom/pan, hold-to-compare (or ⌘\ to toggle),
-  drag-drop/paste import, full undo/redo, canvas presets up to 8K,
-  `.ftrd` self-contained project files.
-- **Export** — PNG/JPEG/TIFF/HEIC/GIF, custom size or @1×/@2×/@3× batch,
-  metadata + watermark, copy to clipboard.
+- 51 filters and 20 presets, plus custom Looks.
+- Editable layers with groups, opacity, and blend modes.
+- Text tools, crop, rotate, flip, and Auto Enhance.
+- Watermarks with five presets, editable text, styling, and positioning.
+- Animated GIF playback, editing, and export.
+- Portable `.ftrd` projects, including files from the Swift version.
+- PNG, JPEG, WebP, TIFF, GIF, and macOS HEIC export.
 
-Previews render at display resolution on a Metal-backed Core Image pipeline
-(Swift 6 strict concurrency), so editing stays fast even on 8K canvases.
+## Run
 
-## Build
+Requires Node.js 22+ and npm. Building on macOS also requires Xcode Command Line Tools.
 
-Requires macOS 15+ and Xcode 26.
-
-```bash
-cd Filtered
-xcodebuild -project Filtered.xcodeproj -scheme Filtered \
-  -configuration Release -destination 'platform=macOS' build
+```sh
+npm install
+npm start
 ```
 
-Copy the built `Filtered.app` to `/Applications`.
+## Build and test
 
----
+```sh
+npm test
+npm run test:smoke
+npm run package
+```
 
-Released under the [MIT License](LICENSE) © 2026 [@uzerone](https://github.com/uzerone).
+The packaged app is saved in `release/`. Use `npm run dist` to create an installer.
+
+## Notes
+
+Tested on Apple Silicon macOS. Windows and Linux builds are configured but untested. Subject cutout requires macOS 14+ and a still image.
+
+Version 2.0 replaces Swift with Electron. Some effects look different from the original. The Swift source is preserved in `legacy/swift/`.
+
+[Changelog](DEVELOPMENT.md) · [MIT License](LICENSE)

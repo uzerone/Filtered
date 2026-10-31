@@ -19,3 +19,13 @@ FilterStudio/
 
 # Local agent instructions (kept out of the repo)
 CLAUDE.md
+
+# Electron dependencies and generated output
+node_modules/
+dist/
+release/
+electron/native/cutout
+tests/smoke.png
+tests/fixture.png
+tests/roundtrip.ftrd
+tests/export.*
