@@ -99,7 +99,7 @@ test("watermark presets preserve custom text and round-trip editable position an
   const p = newProject(),
     mark = createWatermark(p.snapshot.canvas, "© Example");
   p.snapshot.layers.push(mark);
-  assert.equal(mark.position.x, 0.96);
+  assert.deepEqual(mark.position, { x: 0.99, y: 0.99 });
   for (const preset of watermarkPresets) {
     applyWatermarkPreset(mark, preset.id, p.snapshot.canvas);
     assert.equal(mark.text.string, "© Example");

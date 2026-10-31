@@ -29,6 +29,8 @@ npm run test:smoke
 npm run package
 ```
 
+macOS packaging requires Xcode 26+ for native light/dark icon assets.
+
 The packaged app is saved in `release/`. Use `npm run dist` to create an installer.
 
 ## Notes

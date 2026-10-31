@@ -70,6 +70,7 @@ export function positionWatermark(item, anchor) {
     x: anchor.includes("left") ? 0.04 : anchor.includes("right") ? 0.96 : 0.5,
     y: anchor.includes("top") ? 0.04 : anchor.includes("bottom") ? 0.96 : 0.5,
   };
+  if (anchor === "bottom-right") item.position = { x: 0.99, y: 0.99 };
   item.text.alignment = anchor.includes("left")
     ? "left"
     : anchor.includes("right")

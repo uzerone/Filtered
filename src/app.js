@@ -152,7 +152,7 @@ function draw() {
   fitCanvas();
   drawHistogram();
   $("#dimensions").textContent =
-    `${project.snapshot.canvas.width} × ${project.snapshot.canvas.height} px`;
+    `${project.snapshot.canvas.width} × ${project.snapshot.canvas.height} px · ${project.snapshot.canvas.dpi ?? 72} DPI`;
   $("#render-time").textContent = `${Math.round(performance.now() - start)} ms`;
   $("#compare").classList.toggle("active", compare);
   $("#timeline").hidden = frames.length < 2;
@@ -509,6 +509,7 @@ async function openData(data) {
     );
     next.snapshot.canvas.width = Math.round(nextSource.width * fit);
     next.snapshot.canvas.height = Math.round(nextSource.height * fit);
+    next.snapshot.canvas.dpi = data.dpi ?? 72;
     next.snapshot.layers = [layer("image", { name: data.name })];
   }
   if (next.snapshot.canvas.backgroundRemoved && !next.cutoutPNG && nextSource) {

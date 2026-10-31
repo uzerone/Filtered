@@ -53,6 +53,7 @@ try {
       background: { r: 90, g: 140, b: 210, alpha: 1 },
     },
   })
+    .withMetadata({ density: 300 })
     .png()
     .toBuffer();
   await fs.writeFile("tests/fixture.png", png);
@@ -80,6 +81,8 @@ try {
   const data = JSON.parse(await fs.readFile(saved, "utf8"));
   assert.equal(data.snapshot.layers.length, 2);
   assert.ok(data.sourceImagePNG);
+  assert.equal(data.snapshot.canvas.dpi, 300);
+  assert.ok((await page.locator("#dimensions").textContent()).includes("300 DPI"));
   await app.evaluate(({ dialog }, file) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
   }, exported);
@@ -89,6 +92,7 @@ try {
     () => document.querySelector("#status").textContent === "Export saved",
   );
   assert.equal((await sharp(exported).metadata()).width, 96);
+  assert.equal((await sharp(exported).metadata()).density, 300);
   const rgb = await sharp(exported).raw().toBuffer();
   assert.ok(rgb[0] > 90, "Exposure must change exported pixels");
   if (!packaged) {

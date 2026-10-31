@@ -108,6 +108,10 @@ async function readFile(file) {
   return {
     type: "image",
     name: path.basename(file),
+    dpi:
+      Number.isFinite(meta.density) && meta.density > 0
+        ? Math.round(meta.density)
+        : 72,
     png: (await image.rotate().png().toBuffer()).toString("base64"),
     animated:
       meta.pages > 1 && meta.format === "gif" ? data.toString("base64") : null,
